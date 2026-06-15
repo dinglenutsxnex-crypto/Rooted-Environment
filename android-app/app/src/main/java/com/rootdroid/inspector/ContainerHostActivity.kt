@@ -99,6 +99,12 @@ class ContainerHostActivity : ComponentActivity() {
 
                 withContext(Dispatchers.Main) { statusState.value = "Loading APK…" }
 
+                // Ensure APK is read-only — Android 8+ rejects DexClassLoader on writable paths.
+                if (apkFile.canWrite()) {
+                    apkFile.setWritable(false, false)
+                    apkFile.setReadable(true, false)
+                }
+
                 val result = AppLoader.loadFromPath(
                     apkPath      = apkFile.absolutePath,
                     optDir       = optDir.absolutePath,

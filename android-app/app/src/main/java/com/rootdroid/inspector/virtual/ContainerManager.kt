@@ -70,10 +70,17 @@ object ContainerManager {
 
             val dst = apkFile(ctx, pkg).also { it.parentFile!!.mkdirs() }
             File(info.sourceDir).copyTo(dst, overwrite = true)
+            // Android 8+ (API 26+) blocks DexClassLoader on writable dex paths.
+            // The APK must be read-only before we hand it to DexClassLoader.
+            dst.setWritable(false, false)
+            dst.setReadable(true, false)
 
             // Copy splits if any
             info.splitSourceDirs?.forEachIndexed { i, split ->
-                File(split).copyTo(File(dst.parentFile!!, "split_$i.apk"), overwrite = true)
+                val splitDst = File(dst.parentFile!!, "split_$i.apk")
+                File(split).copyTo(splitDst, overwrite = true)
+                splitDst.setWritable(false, false)
+                splitDst.setReadable(true, false)
             }
 
             dataDir(ctx, pkg); optDir(ctx, pkg)
@@ -90,6 +97,8 @@ object ContainerManager {
     // ── Uninstall ─────────────────────────────────────────────────────────────
 
     fun uninstall(ctx: Context, pkg: String) {
+        // Read-only APKs need to be made writable before deleteRecursively works.
+        File(root(ctx), pkg).walkBottomUp().forEach { it.setWritable(true, false) }
         File(root(ctx), pkg).deleteRecursively()
         activeSessions.remove(pkg)
         saveList(ctx, list(ctx).filter { it.packageName != pkg })
