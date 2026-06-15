@@ -2,7 +2,10 @@ package com.rootdroid.inspector
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
@@ -44,9 +47,9 @@ class ContainerHostActivity : ComponentActivity() {
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        val denied = results.entries.filter { !it.value }.map { it.key.substringAfterLast('.') }
+        val denied = results.filterValues { !it }.keys.map { it.substringAfterLast('.') }
         if (denied.isNotEmpty()) {
-            Toast.makeText(this, "Permissions denied by user: ${denied.joinToString()}", Toast.LENGTH_SHORT).show()
+            showToast("Permissions denied: ${denied.joinToString()} — container may be limited")
         }
         loadContainer()
     }
@@ -55,6 +58,8 @@ class ContainerHostActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         pkg = intent.getStringExtra(EXTRA_PKG) ?: run { finish(); return }
+
+        installCrashNet()
 
         setContent {
             RootDroidTheme {
@@ -68,14 +73,13 @@ class ContainerHostActivity : ComponentActivity() {
 
         val apkFile = ContainerManager.apkFile(this, pkg)
         if (!apkFile.exists()) {
-            Toast.makeText(this, "Container APK not found — remove and re-add the app", Toast.LENGTH_LONG).show()
+            showToast("Container APK not found — remove and re-add the app")
             finish()
             return
         }
 
-        val missingPerms = parseApkPermissions(apkFile.absolutePath).filter { perm ->
-            ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED
-        }
+        val missingPerms = parseApkPermissions(apkFile.absolutePath)
+            .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
 
         if (missingPerms.isNotEmpty()) {
             statusState.value = "Requesting ${missingPerms.size} permission(s)…"
@@ -87,61 +91,81 @@ class ContainerHostActivity : ComponentActivity() {
 
     private fun loadContainer() {
         lifecycleScope.launch(Dispatchers.IO) {
-            val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
-            val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
-            val dataDir = ContainerManager.dataDir(this@ContainerHostActivity, pkg)
+            try {
+                val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
+                val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
+                val dataDir = ContainerManager.dataDir(this@ContainerHostActivity, pkg)
+                System.setProperty("vs.data_dir.$pkg", dataDir.absolutePath)
 
-            System.setProperty("vs.data_dir.$pkg", dataDir.absolutePath)
+                withContext(Dispatchers.Main) { statusState.value = "Loading APK…" }
 
-            withContext(Dispatchers.Main) { statusState.value = "Loading APK into container…" }
+                val result = AppLoader.loadFromPath(
+                    apkPath      = apkFile.absolutePath,
+                    optDir       = optDir.absolutePath,
+                    nativeLibDir = null,
+                    parentLoader = classLoader,
+                )
 
-            val nativeLib = try {
-                packageManager.getApplicationInfo(pkg, 0).nativeLibraryDir
-            } catch (_: Exception) { null }
-
-            val result = AppLoader.loadFromPath(
-                apkPath      = apkFile.absolutePath,
-                optDir       = optDir.absolutePath,
-                nativeLibDir = nativeLib,
-                parentLoader = classLoader,
-            )
-
-            if (result.classLoader == null) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        this@ContainerHostActivity,
-                        "Failed to load APK: ${result.error}",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    finish()
+                if (result.classLoader == null) {
+                    withContext(Dispatchers.Main) {
+                        showToast("APK load failed: ${result.error}")
+                        finish()
+                    }
+                    return@launch
                 }
-                return@launch
-            }
 
-            val ourPid = Process.myPid()
-            ContainerManager.registerSession(pkg, ourPid, result.classLoader, apkFile.absolutePath)
+                val ourPid = Process.myPid()
+                ContainerManager.registerSession(pkg, ourPid, result.classLoader, apkFile.absolutePath)
 
-            withContext(Dispatchers.Main) { statusState.value = "Invoking app in container…" }
+                withContext(Dispatchers.Main) { statusState.value = "Invoking Application…" }
 
-            val msg = AppLoader.invokeApplication(
-                context     = this@ContainerHostActivity,
-                packageName = pkg,
-                loader      = result.classLoader,
-                dataDir     = dataDir,
-            )
+                val msg = AppLoader.invokeApplication(
+                    context     = this@ContainerHostActivity,
+                    packageName = pkg,
+                    loader      = result.classLoader,
+                    dataDir     = dataDir,
+                    apkPath     = apkFile.absolutePath,
+                )
 
-            withContext(Dispatchers.Main) {
-                statusState.value = msg
+                withContext(Dispatchers.Main) {
+                    statusState.value = msg
 
-                if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
-                    startForegroundService(
-                        Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
-                            .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-                            .putExtra(InspectorOverlayService.EXTRA_PID, ourPid)
-                    )
+                    if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
+                        startForegroundService(
+                            Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
+                                .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
+                                .putExtra(InspectorOverlayService.EXTRA_PID, ourPid)
+                        )
+                    }
+                }
+
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    showToast("Container error: ${t.javaClass.simpleName}: ${t.message?.take(120)}")
+                    finish()
                 }
             }
         }
+    }
+
+    /**
+     * Sets a per-thread uncaught exception handler so any Throwable that escapes
+     * the coroutine (e.g. from reflection callbacks on pool threads) shows as Toast
+     * instead of an ANR / crash dialog.
+     */
+    private fun installCrashNet() {
+        val main = Handler(Looper.getMainLooper())
+        Thread.setDefaultUncaughtExceptionHandler { _, t ->
+            main.post {
+                if (!isFinishing) {
+                    showToast("Crash: ${t.javaClass.simpleName}: ${t.message?.take(120)}")
+                }
+            }
+        }
+    }
+
+    private fun showToast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
 
     private fun parseApkPermissions(apkPath: String): List<String> {
@@ -149,18 +173,15 @@ class ContainerHostActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             val info = packageManager.getPackageArchiveInfo(apkPath, PackageManager.GET_PERMISSIONS)
             info?.requestedPermissions
-                ?.filter { it.startsWith("android.permission.") }
-                ?.filter { isDangerousPermission(it) }
+                ?.filter { it.startsWith("android.permission.") && isDangerous(it) }
                 ?: emptyList()
-        } catch (_: Exception) { emptyList() }
+        } catch (_: Throwable) { emptyList() }
     }
 
-    private fun isDangerousPermission(perm: String): Boolean {
-        return try {
-            val info = packageManager.getPermissionInfo(perm, 0)
-            (info.protectionLevel and android.content.pm.PermissionInfo.PROTECTION_DANGEROUS) != 0
-        } catch (_: Exception) { false }
-    }
+    private fun isDangerous(perm: String): Boolean = try {
+        (packageManager.getPermissionInfo(perm, 0).protectionLevel
+                and PermissionInfo.PROTECTION_DANGEROUS) != 0
+    } catch (_: Throwable) { false }
 
     override fun onDestroy() {
         super.onDestroy()
@@ -184,7 +205,10 @@ private fun LaunchScreen(pkg: String, status: String) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(pkg.split(".").last(), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text(
+                    pkg.split(".").last(),
+                    fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary,
+                )
                 Text(pkg, fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
             }
             Box(
@@ -192,7 +216,10 @@ private fun LaunchScreen(pkg: String, status: String) {
                     .background(SurfaceHigh, RoundedCornerShape(8.dp))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
-                Text(status, fontSize = 11.sp, color = TextSecond, fontFamily = FontFamily.Monospace)
+                Text(
+                    status,
+                    fontSize = 11.sp, color = TextSecond, fontFamily = FontFamily.Monospace,
+                )
             }
         }
     }
