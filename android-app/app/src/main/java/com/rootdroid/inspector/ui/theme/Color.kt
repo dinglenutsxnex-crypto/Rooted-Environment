@@ -2,25 +2,42 @@ package com.rootdroid.inspector.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Dark hacker palette
-val Background   = Color(0xFF0A0A0A)
-val Surface      = Color(0xFF111111)
-val SurfaceHigh  = Color(0xFF1A1A1A)
-val Border       = Color(0xFF2A2A2A)
+// ── Backgrounds ───────────────────────────────────────────────────────────────
+val Background  = Color(0xFF0D1117)
+val Surface     = Color(0xFF161B22)
+val SurfaceHigh = Color(0xFF21262D)
+val SurfaceMid  = Color(0xFF1C2128)
+val Border      = Color(0xFF30363D)
+val BorderSub   = Color(0xFF21262D)
 
-val NeonGreen    = Color(0xFF00FF41)
-val NeonGreenDim = Color(0xFF00BB30)
-val TextPrimary  = Color(0xFFE0E0E0)
-val TextMuted    = Color(0xFF666666)
-val TextDim      = Color(0xFF444444)
+// ── Accent (blue) ─────────────────────────────────────────────────────────────
+val Accent      = Color(0xFF58A6FF)
+val AccentDim   = Color(0xFF388BFD)
+val AccentMuted = Color(0xFF1F6FEB)
 
-val LogVerbose   = Color(0xFF666666)
-val LogDebug     = Color(0xFF888888)
-val LogInfo      = Color(0xFF00AAFF)
-val LogWarn      = Color(0xFFFFAA00)
-val LogError     = Color(0xFFFF3E3E)
-val LogFatal     = Color(0xFFFF0000)
-val LogFrida     = Color(0xFF00FF41)
+// ── Text ──────────────────────────────────────────────────────────────────────
+val TextPrimary = Color(0xFFE6EDF3)
+val TextSecond  = Color(0xFF8B949E)
+val TextMuted   = Color(0xFF484F58)
+val TextDim     = Color(0xFF30363D)
 
-val BtnDestructive = Color(0xFFFF3E3E)
-val BtnSecondary   = Color(0xFF1E1E1E)
+// ── Semantic ──────────────────────────────────────────────────────────────────
+val StatusGreen  = Color(0xFF3FB950)
+val StatusYellow = Color(0xFFD29922)
+val StatusRed    = Color(0xFFF85149)
+val StatusPurple = Color(0xFFBC8CFF)
+
+// ── Log levels ────────────────────────────────────────────────────────────────
+val LogVerbose  = Color(0xFF484F58)
+val LogDebug    = Color(0xFF8B949E)
+val LogInfo     = Color(0xFF58A6FF)
+val LogWarn     = Color(0xFFD29922)
+val LogError    = Color(0xFFF85149)
+val LogFatal    = Color(0xFFFF7B72)
+val LogFrida    = Color(0xFFBC8CFF)
+
+// ── Legacy aliases (referenced in overlay + inspector) ────────────────────────
+val NeonGreen    = Accent
+val NeonGreenDim = AccentDim
+val BtnDestructive = StatusRed
+val BtnSecondary   = SurfaceHigh
