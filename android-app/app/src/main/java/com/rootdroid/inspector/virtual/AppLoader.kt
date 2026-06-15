@@ -7,13 +7,13 @@ import dalvik.system.DexClassLoader
 /**
  * Loads a target APK into our own process via DexClassLoader.
  *
- * Because the loaded code runs INSIDE our process, any call to
+ * Because the loaded code runs inside our process, any call to
  * Runtime.exec("su") uses OUR process environment — which already
- * has PATH prepended with the fake su binary written by FakeSuProvider.
+ * has PATH prepended with the fake su binary from FakeSuProvider.
  *
- * This is the same fundamental trick used by Rooted Parallel Space /
- * VirtualXposed: the app thinks it is calling real su, but it finds
- * our fake binary first in PATH and gets a fake-root response.
+ * loadFromPath() is the primary entry point when launching from a
+ * container copy (not the system APK). load() falls back to the
+ * system APK path (used for probing).
  */
 object AppLoader {
 
@@ -23,30 +23,35 @@ object AppLoader {
         val error: String? = null,
     )
 
+    // ── Load from an explicit APK path (container copy) ───────────────────────
+
+    fun loadFromPath(
+        apkPath: String,
+        optDir: String,
+        nativeLibDir: String?,
+        parentLoader: ClassLoader,
+    ): LoadResult {
+        return try {
+            val loader = DexClassLoader(apkPath, optDir, nativeLibDir, parentLoader)
+            LoadResult(classLoader = loader, apkPath = apkPath)
+        } catch (e: Exception) {
+            LoadResult(classLoader = null, apkPath = apkPath, error = e.message)
+        }
+    }
+
+    // ── Load from system APK (probe / fallback) ───────────────────────────────
+
     fun load(context: Context, packageName: String): LoadResult {
         return try {
-            val appInfo = context.packageManager.getApplicationInfo(
-                packageName,
-                PackageManager.GET_META_DATA,
-            )
-            val apkPath = appInfo.sourceDir
-            val optDir = context.getDir(
-                "opt_${packageName.replace('.', '_')}",
-                Context.MODE_PRIVATE,
-            )
-
-            // Ensure our fake bin is injected into PATH before any app code
-            // can execute inside this process.
+            val info = context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+            val optDir = context.getDir("opt_${packageName.replace('.', '_')}", Context.MODE_PRIVATE)
             FakeSuProvider.install(context)
-
-            val loader = DexClassLoader(
-                apkPath,
-                optDir.absolutePath,
-                appInfo.nativeLibraryDir,
-                context.classLoader,
+            loadFromPath(
+                apkPath      = info.sourceDir,
+                optDir       = optDir.absolutePath,
+                nativeLibDir = info.nativeLibraryDir,
+                parentLoader = context.classLoader,
             )
-
-            LoadResult(classLoader = loader, apkPath = apkPath)
         } catch (e: PackageManager.NameNotFoundException) {
             LoadResult(classLoader = null, apkPath = "", error = "Package not found: $packageName")
         } catch (e: Exception) {
@@ -54,35 +59,26 @@ object AppLoader {
         }
     }
 
-    /**
-     * Attempt to invoke the app's Application class inside our process.
-     * Many apps only do root checks inside Application.onCreate — calling
-     * this alone is enough to verify the fake-root intercept works.
-     */
+    // ── Invoke Application.onCreate in-process ────────────────────────────────
+
     fun invokeApplication(context: Context, packageName: String, loader: DexClassLoader): String {
         return try {
-            val appInfo = context.packageManager.getApplicationInfo(
-                packageName,
-                PackageManager.GET_META_DATA,
-            )
-            val appClassName = appInfo.className?.takeIf { it.isNotBlank() }
+            val info = context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+            val appClassName = info.className?.takeIf { it.isNotBlank() }
                 ?: return "No Application class declared"
 
-            val clazz = loader.loadClass(appClassName)
+            val clazz    = loader.loadClass(appClassName)
             val instance = clazz.getDeclaredConstructor().newInstance()
 
-            // Call attach(context) via reflection — required before onCreate
+            // attach(Context) must be called before onCreate
             try {
-                val attachMethod = clazz.superclass?.getDeclaredMethod("attach", Context::class.java)
-                attachMethod?.isAccessible = true
-                attachMethod?.invoke(instance, context)
+                clazz.superclass?.getDeclaredMethod("attach", Context::class.java)?.apply {
+                    isAccessible = true; invoke(instance, context)
+                }
             } catch (_: Exception) {}
 
-            // Call onCreate
             try {
-                val onCreate = clazz.getDeclaredMethod("onCreate")
-                onCreate.isAccessible = true
-                onCreate.invoke(instance)
+                clazz.getDeclaredMethod("onCreate").apply { isAccessible = true; invoke(instance) }
             } catch (_: Exception) {}
 
             "Application loaded — fake su active in process"
@@ -91,10 +87,8 @@ object AppLoader {
         }
     }
 
-    /**
-     * Probe which root-detection vectors the loaded app uses.
-     * Returns a map of check-name → result using our fake environment.
-     */
+    // ── Root-check probe ──────────────────────────────────────────────────────
+
     fun probeRootChecks(context: Context, loader: DexClassLoader): Map<String, String> {
         val fakeBin = FakeSuProvider.fakeBinPath(context)
         val path    = "$fakeBin:${System.getenv("PATH") ?: "/system/bin:/system/xbin"}"
@@ -102,16 +96,14 @@ object AppLoader {
         val results = mutableMapOf<String, String>()
 
         FakeSuProvider.fakeResponses.forEach { (cmd, expected) ->
-            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd), env)
+            val p   = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd), env)
             val out = p.inputStream.bufferedReader().readText().trim()
             p.waitFor()
             results[cmd] = if (out == expected) "✓ spoofed" else "✗ got: $out"
         }
 
-        // Extra: check our fake su binary exists and is executable
         val suFile = java.io.File(fakeBin, "su")
         results["su binary exists"] = if (suFile.canExecute()) "✓" else "✗"
-
         return results
     }
 }
