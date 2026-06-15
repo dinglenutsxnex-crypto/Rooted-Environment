@@ -22,8 +22,8 @@ data class ContainerApp(
 )
 
 /**
- * Tracks a live container session — an app loaded in-process via DexClassLoader.
- * pid == Process.myPid() for in-process loads, or the system process PID for fallbacks.
+ * Tracks a live container session — an app running inside the container user
+ * (or loaded in-process via DexClassLoader for inspection).
  */
 data class ContainerSession(
     val pkg: String,
@@ -39,7 +39,7 @@ object ContainerManager {
     private const val KEY   = "apps_v1"
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    /** In-process sessions. Written from ContainerHostActivity, read from overlay. */
+    /** In-process sessions / active container sessions. */
     val activeSessions: ConcurrentHashMap<String, ContainerSession> = ConcurrentHashMap()
 
     // ── Paths ─────────────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ object ContainerManager {
     fun optDir(ctx: Context, pkg: String)    = File(root(ctx), "$pkg/opt").also  { it.mkdirs() }
     fun isInstalled(ctx: Context, pkg: String) = apkFile(ctx, pkg).exists()
 
-    // ── Session registry (in-memory, process lifetime) ────────────────────────
+    // ── Session registry ──────────────────────────────────────────────────────
 
     fun registerSession(pkg: String, pid: Int, loader: DexClassLoader?, apkPath: String) {
         activeSessions[pkg] = ContainerSession(pkg, pid, loader, apkPath)
@@ -62,17 +62,23 @@ object ContainerManager {
 
     // ── Install ───────────────────────────────────────────────────────────────
 
+    /**
+     * Copies the host-installed APK into our private dir (read-only, required
+     * by Android 8+ DexClassLoader security check), then installs it into the
+     * container user profile via root so it can be launched in isolation.
+     */
     suspend fun install(ctx: Context, pkg: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val pm    = ctx.packageManager
             val info  = pm.getApplicationInfo(pkg, 0)
             val label = pm.getApplicationLabel(info).toString()
 
+            // ── Copy APK for in-process dex inspection ──
             val dst = apkFile(ctx, pkg).also { it.parentFile!!.mkdirs() }
-            // Must be writable before copy (re-installs land on a read-only file).
+            // Make writable before copy in case of re-install over read-only file
             if (dst.exists()) dst.setWritable(true, false)
             File(info.sourceDir).copyTo(dst, overwrite = true)
-            // Android 8+ (API 26+) blocks DexClassLoader on writable dex paths.
+            // Android 8+ (API 26+): DexClassLoader rejects writable dex paths
             dst.setWritable(false, false)
             dst.setReadable(true, false)
 
@@ -87,6 +93,14 @@ object ContainerManager {
 
             dataDir(ctx, pkg); optDir(ctx, pkg)
 
+            // ── Install into container user via root ──
+            val rooted = UserSpaceManager.isRooted()
+            if (rooted) {
+                UserSpaceManager.installIntoContainer(ctx, pkg)
+                UserSpaceManager.installFakeSuForContainer(ctx, pkg)
+            }
+
+            // ── Register in app list ──
             val apps = list(ctx).toMutableList()
             if (apps.none { it.packageName == pkg }) {
                 apps += ContainerApp(pkg, label, apkSizeBytes = dst.length())
@@ -99,11 +113,18 @@ object ContainerManager {
     // ── Uninstall ─────────────────────────────────────────────────────────────
 
     fun uninstall(ctx: Context, pkg: String) {
-        // Read-only APKs need to be made writable before deleteRecursively works.
+        // Read-only APKs need to be made writable before deleteRecursively
         File(root(ctx), pkg).walkBottomUp().forEach { it.setWritable(true, false) }
         File(root(ctx), pkg).deleteRecursively()
         activeSessions.remove(pkg)
         saveList(ctx, list(ctx).filter { it.packageName != pkg })
+    }
+
+    suspend fun uninstallAsync(ctx: Context, pkg: String) = withContext(Dispatchers.IO) {
+        if (UserSpaceManager.isRooted()) {
+            UserSpaceManager.uninstallFromContainer(ctx, pkg)
+        }
+        uninstall(ctx, pkg)
     }
 
     // ── List ──────────────────────────────────────────────────────────────────

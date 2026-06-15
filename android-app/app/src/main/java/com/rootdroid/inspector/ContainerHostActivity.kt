@@ -29,11 +29,10 @@ import androidx.lifecycle.lifecycleScope
 import com.rootdroid.inspector.service.InspectorOverlayService
 import com.rootdroid.inspector.ui.theme.*
 import com.rootdroid.inspector.virtual.AppLoader
-import com.rootdroid.inspector.virtual.ContainerEngine
 import com.rootdroid.inspector.virtual.ContainerManager
 import com.rootdroid.inspector.virtual.FakeSuProvider
+import com.rootdroid.inspector.virtual.UserSpaceManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,13 +43,11 @@ class ContainerHostActivity : ComponentActivity() {
     }
 
     private lateinit var pkg: String
-    private val statusState = mutableStateOf("Setting up container…")
+    private val statusState = mutableStateOf("Starting container…")
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
-        loadContainer()
-    }
+    ) { _ -> loadContainer() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,19 +90,15 @@ class ContainerHostActivity : ComponentActivity() {
                 val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
                 val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
 
-                withContext(Dispatchers.Main) { statusState.value = "Inspecting APK…" }
+                // ── Step 1: Load dex for static inspection / method hooking ──
+                withContext(Dispatchers.Main) { statusState.value = "Loading dex…" }
 
-                // Android 8+ (API 26+): dex path must not be writable or DexClassLoader throws SecurityException.
+                // Android 8+ requires dex path to be read-only for DexClassLoader
                 if (apkFile.canWrite()) {
                     apkFile.setWritable(false, false)
                     apkFile.setReadable(true, false)
                 }
 
-                // Load dex for static analysis / class enumeration.
-                // We deliberately do NOT call invokeApplication() — running a foreign
-                // app's Application.onCreate() in-process crashes for any real app
-                // because it hits Binder, ContentProviders, and native libs that
-                // can't bootstrap inside a foreign process without a full VA framework.
                 val result = AppLoader.loadFromPath(
                     apkPath      = apkFile.absolutePath,
                     optDir       = optDir.absolutePath,
@@ -113,36 +106,40 @@ class ContainerHostActivity : ComponentActivity() {
                     parentLoader = classLoader,
                 )
 
+                // Register the dex loader for method enumeration in the overlay
                 if (result.classLoader != null) {
                     ContainerManager.registerSession(
-                        pkg       = pkg,
-                        pid       = Process.myPid(),
-                        loader    = result.classLoader,
-                        apkPath   = apkFile.absolutePath,
+                        pkg     = pkg,
+                        pid     = -1, // PID not known yet
+                        loader  = result.classLoader,
+                        apkPath = apkFile.absolutePath,
                     )
                 }
 
-                withContext(Dispatchers.Main) { statusState.value = "Launching…" }
+                // ── Step 2: Launch inside isolated container user via root ──
+                val rooted = UserSpaceManager.isRooted()
 
-                // Launch the real system-installed app. The OS handles activity
-                // management, process isolation, and permission grants for the app's
-                // own UID. We then track its PID and attach the overlay inspector.
-                val launched = tryLaunchViaSystem()
-
-                if (!launched) {
-                    withContext(Dispatchers.Main) {
-                        showToast("No launcher activity found for $pkg")
-                        finish()
+                val appPid: Int
+                if (rooted) {
+                    withContext(Dispatchers.Main) { statusState.value = "Launching in container user…" }
+                    appPid = UserSpaceManager.launchInContainer(this@ContainerHostActivity, pkg)
+                    if (appPid < 0) {
+                        withContext(Dispatchers.Main) {
+                            showToast("Failed to launch $pkg in container. Is it installed?")
+                            finish()
+                        }
+                        return@launch
                     }
-                    return@launch
+                } else {
+                    // No root — can only do dex inspection, no real container isolation
+                    withContext(Dispatchers.Main) {
+                        showToast("No root detected — container isolation unavailable. Dex inspection only.")
+                    }
+                    appPid = Process.myPid()
                 }
 
-                // Give the app process a moment to start, then find its PID.
-                delay(1500)
-                val appPid = ContainerEngine.findPid(this@ContainerHostActivity, pkg)
-
-                // Update session with real PID if we found it.
-                if (result.classLoader != null && appPid > 0) {
+                // ── Step 3: Update session with real PID ──
+                if (result.classLoader != null) {
                     ContainerManager.registerSession(
                         pkg     = pkg,
                         pid     = appPid,
@@ -151,17 +148,22 @@ class ContainerHostActivity : ComponentActivity() {
                     )
                 }
 
+                // ── Step 4: Start overlay inspector ──
                 withContext(Dispatchers.Main) {
+                    statusState.value = "Container running · PID $appPid"
+
                     if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
-                        val overlayPid = if (appPid > 0) appPid else Process.myPid()
                         startForegroundService(
                             Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
                                 .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-                                .putExtra(InspectorOverlayService.EXTRA_PID, overlayPid)
+                                .putExtra(InspectorOverlayService.EXTRA_PID, appPid)
                         )
                     }
-                    // Close the loading screen — the target app is now in the foreground.
-                    finish()
+
+                    // Short delay so the user sees the "running" status, then close
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        finish()
+                    }, 800)
                 }
 
             } catch (t: Throwable) {
@@ -173,33 +175,16 @@ class ContainerHostActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Launch the system-installed app normally.
-     * Returns true if an intent was found and fired.
-     */
-    private fun tryLaunchViaSystem(): Boolean {
-        val intent = packageManager
-            .getLaunchIntentForPackage(pkg)
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            ?: return false
-        startActivity(intent)
-        return true
-    }
-
     private fun installCrashNet() {
         val main = Handler(Looper.getMainLooper())
         Thread.setDefaultUncaughtExceptionHandler { _, t ->
             main.post {
-                if (!isFinishing) {
-                    showToast("Crash: ${t.javaClass.simpleName}: ${t.message?.take(120)}")
-                }
+                if (!isFinishing) showToast("Crash: ${t.javaClass.simpleName}: ${t.message?.take(120)}")
             }
         }
     }
 
-    private fun showToast(msg: String) {
-        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-    }
+    private fun showToast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 
     private fun parseApkPermissions(apkPath: String): List<String> {
         return try {
@@ -218,7 +203,8 @@ class ContainerHostActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        ContainerManager.unregisterSession(pkg)
+        // Don't unregister — the container user keeps running in the background
+        // and the overlay service stays attached to it
     }
 }
 

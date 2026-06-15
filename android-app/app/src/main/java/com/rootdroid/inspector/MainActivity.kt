@@ -87,7 +87,7 @@ fun VirtualSpaceApp(activity: MainActivity, repo: InstalledAppsRepository) {
         },
         onLaunch = { app -> ContainerManager.launch(activity, app.packageName) },
         onRemove = { app ->
-            scope.launch(Dispatchers.IO) { ContainerManager.uninstall(activity, app.packageName) }
+            scope.launch(Dispatchers.IO) { ContainerManager.uninstallAsync(activity, app.packageName) }
             refresh()
         },
         getIcon = { pkg -> repo.getIcon(pkg) },
