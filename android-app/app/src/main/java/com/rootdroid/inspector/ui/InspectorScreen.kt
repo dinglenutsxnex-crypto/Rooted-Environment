@@ -161,13 +161,6 @@ fun InspectorScreen(
                 containerColor = Surface,
                 contentColor = NeonGreen,
                 edgePadding = 0.dp,
-                indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = NeonGreen,
-                        height = 2.dp,
-                    )
-                },
             ) {
                 tabs.forEachIndexed { i, label ->
                     Tab(
