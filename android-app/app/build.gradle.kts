@@ -61,6 +61,12 @@ android {
         compose = true
         buildConfig = true
     }
+
+    lint {
+        // Crashes on Kotlin 2.x due to analysis-API incompatibility in lifecycle-lint
+        disable += "NullSafeMutableLiveData"
+        abortOnError = true
+    }
 }
 
 dependencies {
