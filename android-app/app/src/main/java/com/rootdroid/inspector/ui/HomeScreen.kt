@@ -1,7 +1,6 @@
 package com.rootdroid.inspector.ui
 
 import android.graphics.drawable.Drawable
-import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,8 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -39,40 +35,47 @@ import com.rootdroid.inspector.ui.theme.*
 @Composable
 fun HomeScreen(
     managedApps: List<ManagedApp>,
-    isRooted: Boolean,
+    rootSimActive: Boolean,
     onAddApp: () -> Unit,
-    onInspect: (ManagedApp) -> Unit,
+    onLaunch: (ManagedApp) -> Unit,
     onRemove: (ManagedApp) -> Unit,
     getIcon: (String) -> Drawable?,
 ) {
-    var showRootWarning by remember { mutableStateOf(!isRooted) }
-
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .background(
-                                    if (isRooted) NeonGreen else LogError,
-                                    CircleShape
-                                )
-                        )
-                        Text(
-                            "ROOTDROID",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = NeonGreen,
-                            letterSpacing = 4.sp,
-                        )
+                    Text(
+                        "VIRTUAL SPACE",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = NeonGreen,
+                        letterSpacing = 3.sp,
+                    )
+                },
+                actions = {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (rootSimActive) NeonGreen.copy(alpha = 0.15f) else SurfaceHigh,
+                        modifier = Modifier.padding(end = 12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Box(Modifier.size(6.dp).background(if (rootSimActive) NeonGreen else TextDim, CircleShape))
+                            Text(
+                                if (rootSimActive) "SU ACTIVE" else "BASIC",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                letterSpacing = 1.sp,
+                                color = if (rootSimActive) NeonGreen else TextMuted,
+                            )
+                        }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Background,
-                    titleContentColor = TextPrimary,
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Background),
             )
         },
         floatingActionButton = {
@@ -87,34 +90,9 @@ fun HomeScreen(
         },
         containerColor = Background,
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            // Root warning banner
-            AnimatedVisibility(visible = showRootWarning) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(LogError.copy(alpha = 0.15f))
-                        .border(1.dp, LogError.copy(alpha = 0.4f))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Info, contentDescription = null, tint = LogError, modifier = Modifier.size(16.dp))
-                        Text("ROOT NOT DETECTED — some features unavailable", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = LogError)
-                    }
-                    TextButton(onClick = { showRootWarning = false }) {
-                        Text("DISMISS", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
-                    }
-                }
-            }
-
+        Column(Modifier.fillMaxSize().padding(padding)) {
             if (managedApps.isEmpty()) {
-                EmptyState(modifier = Modifier.fillMaxSize())
+                EmptyState(Modifier.fillMaxSize())
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -124,12 +102,7 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(managedApps, key = { it.packageName }) { app ->
-                        AppCard(
-                            app = app,
-                            icon = getIcon(app.packageName),
-                            onInspect = { onInspect(app) },
-                            onRemove = { onRemove(app) },
-                        )
+                        AppCard(app = app, icon = getIcon(app.packageName), onLaunch = { onLaunch(app) }, onRemove = { onRemove(app) })
                     }
                 }
             }
@@ -139,116 +112,50 @@ fun HomeScreen(
 
 @Composable
 private fun EmptyState(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            "[ NO TARGETS ]",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            color = TextDim,
-            letterSpacing = 2.sp,
-        )
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text("[ SPACE EMPTY ]", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = TextDim, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
-        Text(
-            "Tap + to add an app to inspect",
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            color = TextDim,
-            textAlign = TextAlign.Center,
-        )
+        Text("Tap + to add an app to the virtual space", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextDim, textAlign = TextAlign.Center)
     }
 }
 
 @Composable
-fun AppCard(
-    app: ManagedApp,
-    icon: Drawable?,
-    onInspect: () -> Unit,
-    onRemove: () -> Unit,
-) {
-    var showMenu by remember { mutableStateOf(false) }
-
+fun AppCard(app: ManagedApp, icon: Drawable?, onLaunch: () -> Unit, onRemove: () -> Unit) {
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(0.85f)
+            .fillMaxWidth().aspectRatio(0.85f)
             .background(SurfaceHigh, RoundedCornerShape(12.dp))
             .border(1.dp, Border, RoundedCornerShape(12.dp))
-            .clickable { onInspect() }
+            .clickable { onLaunch() }
             .padding(8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            // App icon
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Surface),
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(Surface), contentAlignment = Alignment.Center) {
                 if (icon != null) {
-                    Image(
-                        bitmap = icon.toBitmap(52, 52).asImageBitmap(),
-                        contentDescription = app.appName,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    Image(bitmap = icon.toBitmap(52, 52).asImageBitmap(), contentDescription = app.appName, modifier = Modifier.fillMaxSize())
                 } else {
                     Text("?", color = TextMuted, fontFamily = FontFamily.Monospace, fontSize = 20.sp)
                 }
             }
-
             Spacer(Modifier.height(8.dp))
-
-            Text(
-                app.appName,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                color = TextPrimary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                app.packageName.split(".").last(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
-                color = TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Text(app.appName, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            Text(app.packageName.split(".").last(), fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-
-        // Top-right delete button
-        Box(modifier = Modifier.align(Alignment.TopEnd)) {
-            IconButton(
-                onClick = onRemove,
-                modifier = Modifier.size(24.dp),
-            ) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Remove",
-                    tint = TextDim,
-                    modifier = Modifier.size(14.dp),
-                )
+        Box(Modifier.align(Alignment.TopEnd)) {
+            IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextDim, modifier = Modifier.size(14.dp))
             }
         }
-
-        // Bottom: inspect button on hover
         Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .background(NeonGreen.copy(alpha = 0.08f), RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
                 .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.Center,
         ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = NeonGreen, modifier = Modifier.size(12.dp))
             Spacer(Modifier.width(2.dp))
-            Text("INSPECT", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = NeonGreen, letterSpacing = 1.sp)
+            Text("LAUNCH", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = NeonGreen, letterSpacing = 1.sp)
         }
     }
 }
