@@ -2,13 +2,16 @@ package com.rootdroid.inspector.virtual
 
 import android.content.Context
 import android.content.Intent
+import android.os.Process
 import com.rootdroid.inspector.ContainerHostActivity
+import dalvik.system.DexClassLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 @Serializable
 data class ContainerApp(
@@ -18,11 +21,26 @@ data class ContainerApp(
     val apkSizeBytes: Long = 0L,
 )
 
+/**
+ * Tracks a live container session — an app loaded in-process via DexClassLoader.
+ * pid == Process.myPid() for in-process loads, or the system process PID for fallbacks.
+ */
+data class ContainerSession(
+    val pkg: String,
+    val pid: Int,
+    val classLoader: DexClassLoader?,
+    val apkPath: String,
+    val startedAt: Long = System.currentTimeMillis(),
+)
+
 object ContainerManager {
 
     private const val PREFS = "vs_container_registry"
     private const val KEY   = "apps_v1"
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    /** In-process sessions. Written from ContainerHostActivity, read from overlay. */
+    val activeSessions: ConcurrentHashMap<String, ContainerSession> = ConcurrentHashMap()
 
     // ── Paths ─────────────────────────────────────────────────────────────────
 
@@ -32,9 +50,18 @@ object ContainerManager {
     fun optDir(ctx: Context, pkg: String)    = File(root(ctx), "$pkg/opt").also  { it.mkdirs() }
     fun isInstalled(ctx: Context, pkg: String) = apkFile(ctx, pkg).exists()
 
+    // ── Session registry (in-memory, process lifetime) ────────────────────────
+
+    fun registerSession(pkg: String, pid: Int, loader: DexClassLoader?, apkPath: String) {
+        activeSessions[pkg] = ContainerSession(pkg, pid, loader, apkPath)
+    }
+
+    fun unregisterSession(pkg: String) {
+        activeSessions.remove(pkg)
+    }
+
     // ── Install ───────────────────────────────────────────────────────────────
 
-    /** Copies APK into private container dir. Returns true on success. */
     suspend fun install(ctx: Context, pkg: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val pm    = ctx.packageManager
@@ -42,39 +69,29 @@ object ContainerManager {
             val label = pm.getApplicationLabel(info).toString()
 
             val dst = apkFile(ctx, pkg).also { it.parentFile!!.mkdirs() }
-            val src = File(info.sourceDir)
-            src.copyTo(dst, overwrite = true)
+            File(info.sourceDir).copyTo(dst, overwrite = true)
 
-            // Copy split APKs if present
+            // Copy splits if any
             info.splitSourceDirs?.forEachIndexed { i, split ->
                 File(split).copyTo(File(dst.parentFile!!, "split_$i.apk"), overwrite = true)
             }
 
-            // Init isolated data + opt dirs
-            dataDir(ctx, pkg)
-            optDir(ctx, pkg)
+            dataDir(ctx, pkg); optDir(ctx, pkg)
 
-            // Register
             val apps = list(ctx).toMutableList()
             if (apps.none { it.packageName == pkg }) {
-                apps += ContainerApp(
-                    packageName  = pkg,
-                    appName      = label,
-                    apkSizeBytes = dst.length(),
-                )
+                apps += ContainerApp(pkg, label, apkSizeBytes = dst.length())
                 saveList(ctx, apps)
             }
             true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
+        } catch (e: Exception) { e.printStackTrace(); false }
     }
 
     // ── Uninstall ─────────────────────────────────────────────────────────────
 
     fun uninstall(ctx: Context, pkg: String) {
         File(root(ctx), pkg).deleteRecursively()
+        activeSessions.remove(pkg)
         saveList(ctx, list(ctx).filter { it.packageName != pkg })
     }
 
@@ -95,8 +112,6 @@ object ContainerManager {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun saveList(ctx: Context, apps: List<ContainerApp>) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
