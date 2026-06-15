@@ -1,7 +1,6 @@
 package com.rootdroid.inspector.ui
 
 import android.graphics.drawable.Drawable
-import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -48,101 +47,118 @@ fun InspectorScreen(
     overlayActive: Boolean,
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("LOGS", "CALLS", "MEMORY", "FILES")
+    val tabs = listOf("Logs", "Memory", "Files")
 
     Scaffold(
         topBar = {
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextSecond)
                     }
                 },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (icon != null) {
                             Image(
-                                bitmap = icon.toBitmap(32, 32).asImageBitmap(),
+                                bitmap = icon.toBitmap(28, 28).asImageBitmap(),
                                 contentDescription = null,
-                                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)),
+                                modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)),
                             )
                         }
                         Column {
-                            Text(app.appName, fontFamily = FontFamily.Monospace, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            Text(app.packageName, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                app.appName,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                app.packageName,
+                                fontSize = 10.sp,
+                                color = TextMuted,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 },
                 actions = {
-                    // PID badge
                     if (pid > 0) {
-                        Box(
+                        Text(
+                            "PID $pid",
+                            fontSize = 11.sp,
+                            color = Accent,
+                            fontFamily = FontFamily.Monospace,
                             modifier = Modifier
-                                .background(SurfaceHigh, RoundedCornerShape(4.dp))
-                                .border(1.dp, Border, RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text("PID $pid", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = NeonGreen)
-                        }
-                        Spacer(Modifier.width(4.dp))
+                                .background(Accent.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
                     }
-                    // Running indicator
                     Box(
-                        modifier = Modifier
+                        Modifier
                             .size(8.dp)
-                            .background(if (isRunning) NeonGreen else TextDim, CircleShape)
+                            .background(if (isRunning) StatusGreen else TextMuted, CircleShape)
                     )
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(16.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Surface),
             )
         },
         bottomBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Surface)
-                    .border(1.dp, Border)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (isRunning) {
-                    OutlinedButton(
-                        onClick = onKill,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = LogError),
-                        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("KILL", fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 1.sp)
-                    }
-                } else {
-                    Button(
-                        onClick = onLaunch,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = NeonGreen, contentColor = Background),
-                        shape = RoundedCornerShape(6.dp),
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("LAUNCH", fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 1.sp)
-                    }
-                }
-
-                Button(
-                    onClick = onToggleOverlay,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (overlayActive) NeonGreen.copy(alpha = 0.2f) else SurfaceHigh,
-                        contentColor = if (overlayActive) NeonGreen else TextMuted,
-                    ),
-                    shape = RoundedCornerShape(6.dp),
+            Column {
+                HorizontalDivider(color = Border, thickness = 0.5.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Surface)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("OVERLAY", fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 1.sp)
+                    if (isRunning) {
+                        OutlinedButton(
+                            onClick = onKill,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusRed),
+                            border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Kill", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    } else {
+                        Button(
+                            onClick = onLaunch,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Background),
+                            shape = RoundedCornerShape(8.dp),
+                            elevation = ButtonDefaults.buttonElevation(0.dp),
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Launch", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onToggleOverlay,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (overlayActive) Accent else TextSecond,
+                        ),
+                        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Overlay", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
                 }
             }
         },
@@ -150,37 +166,39 @@ fun InspectorScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
 
-            // Process info bar
             if (processInfo != null) {
                 ProcessInfoBar(processInfo)
             }
 
-            // Tabs
-            ScrollableTabRow(
+            HorizontalDivider(color = Border, thickness = 0.5.dp)
+
+            TabRow(
                 selectedTabIndex = selectedTab,
                 containerColor = Surface,
-                contentColor = NeonGreen,
-                edgePadding = 0.dp,
+                contentColor = Accent,
+                divider = {},
             ) {
                 tabs.forEachIndexed { i, label ->
                     Tab(
                         selected = selectedTab == i,
                         onClick = { selectedTab = i },
                         text = {
-                            Text(label, fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 2.sp)
+                            Text(
+                                label,
+                                fontSize = 13.sp,
+                                fontWeight = if (selectedTab == i) FontWeight.SemiBold else FontWeight.Normal,
+                            )
                         },
-                        selectedContentColor = NeonGreen,
-                        unselectedContentColor = TextMuted,
+                        selectedContentColor = Accent,
+                        unselectedContentColor = TextSecond,
                     )
                 }
             }
 
-            // Tab content
             when (selectedTab) {
                 0 -> LogsTab(logs)
-                1 -> CallsTab(calls)
-                2 -> MemoryTab(memoryRegions, processInfo)
-                3 -> FilesTab(openFiles)
+                1 -> MemoryTab(memoryRegions)
+                2 -> FilesTab(openFiles)
             }
         }
     }
@@ -191,50 +209,42 @@ private fun ProcessInfoBar(info: ProcessInfo) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(SurfaceHigh)
-            .border(1.dp, Border)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+            .background(SurfaceMid)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        StatChip("RSS", "${info.vmRssKb / 1024} MB")
-        StatChip("VSZ", "${info.vmSizeKb / 1024} MB")
-        StatChip("THR", info.threads.toString())
-        StatChip("ST", info.state)
+        StatItem("RSS", "${info.vmRssKb / 1024} MB")
+        StatItem("VSZ", "${info.vmSizeKb / 1024} MB")
+        StatItem("Threads", info.threads.toString())
+        StatItem("State", info.state)
     }
 }
 
 @Composable
-private fun StatChip(label: String, value: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
-        Text(value, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = NeonGreen, fontWeight = FontWeight.Bold)
+private fun StatItem(label: String, value: String) {
+    Column {
+        Text(label, fontSize = 9.sp, color = TextMuted, fontWeight = FontWeight.Medium)
+        Text(value, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
     }
 }
 
 @Composable
 private fun LogsTab(logs: List<LogEntry>) {
     val listState = rememberLazyListState()
-    var autoScroll by remember { mutableStateOf(true) }
-
     LaunchedEffect(logs.size) {
-        if (autoScroll && logs.isNotEmpty()) {
-            listState.animateScrollToItem(logs.size - 1)
-        }
+        if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
-
     if (logs.isEmpty()) {
-        EmptySectionPlaceholder("Waiting for logcat output...")
+        Placeholder("Waiting for logcat…")
     } else {
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp)) {
-            items(logs, key = { it.id }) { entry ->
-                LogEntryRow(entry)
-            }
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp)) {
+            items(logs, key = { it.id }) { LogRow(it) }
         }
     }
 }
 
 @Composable
-private fun LogEntryRow(entry: LogEntry) {
+private fun LogRow(entry: LogEntry) {
     val levelColor = when (entry.level) {
         LogLevel.V -> LogVerbose
         LogLevel.D -> LogDebug
@@ -245,15 +255,15 @@ private fun LogEntryRow(entry: LogEntry) {
         LogLevel.FRIDA -> LogFrida
     }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 1.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             entry.timestamp.takeLast(12),
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
-            color = TextDim,
-            modifier = Modifier.width(76.dp),
+            color = TextMuted,
+            modifier = Modifier.width(72.dp),
         )
         Text(
             entry.level.name,
@@ -261,82 +271,38 @@ private fun LogEntryRow(entry: LogEntry) {
             fontSize = 9.sp,
             color = levelColor,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.width(14.dp),
+            modifier = Modifier.width(12.dp),
         )
         Text(
             "${entry.tag}: ${entry.message}",
             fontFamily = FontFamily.Monospace,
             fontSize = 10.sp,
-            color = TextPrimary.copy(alpha = if (entry.level == LogLevel.V) 0.5f else 1f),
+            color = TextPrimary.copy(alpha = if (entry.level == LogLevel.V) 0.45f else 0.9f),
         )
     }
 }
 
 @Composable
-private fun CallsTab(calls: List<FunctionCall>) {
-    if (calls.isEmpty()) {
-        EmptySectionPlaceholder("No intercepted calls yet.\nLaunch app and strace will capture syscalls.")
-    } else {
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(calls, key = { it.id }) { call ->
-                CallEntryRow(call)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CallEntryRow(call: FunctionCall) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .background(SurfaceHigh, RoundedCornerShape(4.dp))
-            .border(1.dp, Border, RoundedCornerShape(4.dp))
-            .padding(8.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("→", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = NeonGreen)
-            Text(
-                "${call.className}.${call.methodName}()",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                color = NeonGreen,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(call.timestamp, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextDim)
-        }
-        call.args.forEachIndexed { i, arg ->
-            Text("  arg[$i]: $arg", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
-        }
-        Text("  ret: ${call.returnValue}", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = LogInfo)
-    }
-}
-
-@Composable
-private fun MemoryTab(regions: List<MemoryRegion>, info: ProcessInfo?) {
+private fun MemoryTab(regions: List<MemoryRegion>) {
     if (regions.isEmpty()) {
-        EmptySectionPlaceholder("Launch app to read /proc/PID/maps")
+        Placeholder("Memory map not available\nLaunch app and wait for process scan")
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(regions, key = { it.address }) { region ->
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(region.address, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = NeonGreenDim, modifier = Modifier.width(120.dp))
+                    Text(region.address, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = Accent, modifier = Modifier.width(118.dp))
                     Text(region.perms, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = when {
-                        region.perms.contains("x") -> LogWarn
-                        region.perms.contains("w") -> LogInfo
+                        "x" in region.perms -> LogWarn
+                        "w" in region.perms -> LogInfo
                         else -> TextMuted
-                    }, modifier = Modifier.width(32.dp))
-                    Text("${region.sizeKb}K", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextDim, modifier = Modifier.width(48.dp))
-                    Text(region.name, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextPrimary, overflow = TextOverflow.Ellipsis, maxLines = 1)
+                    }, modifier = Modifier.width(30.dp))
+                    Text("${region.sizeKb}K", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextMuted, modifier = Modifier.width(44.dp))
+                    Text(region.name, fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                HorizontalDivider(color = Border.copy(alpha = 0.3f), thickness = 0.5.dp)
+                HorizontalDivider(color = BorderSub, thickness = 0.5.dp)
             }
         }
     }
@@ -345,26 +311,34 @@ private fun MemoryTab(regions: List<MemoryRegion>, info: ProcessInfo?) {
 @Composable
 private fun FilesTab(files: List<String>) {
     if (files.isEmpty()) {
-        EmptySectionPlaceholder("Launch app to read open file descriptors\nfrom /proc/PID/fd")
+        Placeholder("Open file descriptors not available\nLaunch app and wait for process scan")
     } else {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(files) { file ->
                 Text(
                     file,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = TextPrimary,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 )
-                HorizontalDivider(color = Border.copy(alpha = 0.3f), thickness = 0.5.dp)
+                HorizontalDivider(color = BorderSub, thickness = 0.5.dp)
             }
         }
     }
 }
 
 @Composable
-private fun EmptySectionPlaceholder(msg: String) {
+private fun Placeholder(msg: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(msg, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextDim, lineHeight = 18.sp)
+        Text(
+            msg,
+            fontSize = 13.sp,
+            color = TextMuted,
+            lineHeight = 20.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(32.dp),
+        )
     }
 }
+
