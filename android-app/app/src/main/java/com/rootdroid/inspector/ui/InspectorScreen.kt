@@ -112,7 +112,7 @@ fun InspectorScreen(
                         onClick = onKill,
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = LogError),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(),
+                        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
                     ) {
                         Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
