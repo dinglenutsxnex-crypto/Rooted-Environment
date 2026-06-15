@@ -3,7 +3,6 @@ package com.rootdroid.inspector.ui
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +21,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
@@ -48,47 +48,50 @@ fun AppPickerSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = Surface,
+        tonalElevation = 0.dp,
         dragHandle = {
             Box(
                 modifier = Modifier
                     .padding(vertical = 12.dp)
-                    .width(36.dp)
-                    .height(4.dp)
+                    .width(32.dp)
+                    .height(3.dp)
                     .background(Border, RoundedCornerShape(2.dp))
             )
         },
     ) {
         Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding()) {
+
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "SELECT TARGET",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    color = NeonGreen,
-                    letterSpacing = 3.sp,
-                )
+                Column {
+                    Text("Add app", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    if (!isLoading) {
+                        Text("${filtered.size} installed", fontSize = 12.sp, color = TextMuted)
+                    }
+                }
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextMuted)
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecond)
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            // Search bar
+            // Search
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
-                    .background(SurfaceHigh, RoundedCornerShape(8.dp))
-                    .border(1.dp, Border, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .background(SurfaceHigh, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
                 BasicTextField(
@@ -96,16 +99,10 @@ fun AppPickerSheet(
                     onValueChange = { query = it },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    textStyle = TextStyle(
-                        color = TextPrimary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                    ),
-                    cursorBrush = SolidColor(NeonGreen),
+                    textStyle = TextStyle(color = TextPrimary, fontSize = 14.sp),
+                    cursorBrush = SolidColor(Accent),
                     decorationBox = { inner ->
-                        if (query.isEmpty()) {
-                            Text("filter packages...", fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = TextDim)
-                        }
+                        if (query.isEmpty()) Text("Search apps…", fontSize = 14.sp, color = TextMuted)
                         inner()
                     },
                 )
@@ -113,26 +110,17 @@ fun AppPickerSheet(
 
             Spacer(Modifier.height(8.dp))
 
-            // Count
-            Text(
-                "${filtered.size} packages",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                color = TextMuted,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-
-            Spacer(Modifier.height(4.dp))
-
             if (isLoading) {
-                Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = NeonGreen, modifier = Modifier.size(24.dp))
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(180.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
                     items(filtered, key = { it.packageName }) { app ->
                         AppListRow(app = app, onClick = { onSelect(app) })
@@ -140,7 +128,7 @@ fun AppPickerSheet(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -153,26 +141,29 @@ private fun AppListRow(app: InstalledApp, onClick: () -> Unit) {
             .clickable { onClick() }
             .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(
-            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(SurfaceHigh),
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(SurfaceHigh),
             contentAlignment = Alignment.Center,
         ) {
             if (app.icon != null) {
                 Image(
-                    bitmap = app.icon.toBitmap(40, 40).asImageBitmap(),
+                    bitmap = app.icon.toBitmap(42, 42).asImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                Text("?", color = TextMuted, fontFamily = FontFamily.Monospace)
+                Text("?", color = TextMuted, fontSize = 16.sp)
             }
         }
         Column(modifier = Modifier.weight(1f)) {
-            Text(app.appName, fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = TextPrimary)
-            Text(app.packageName, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextMuted)
+            Text(app.appName, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+            Text(app.packageName, fontSize = 11.sp, color = TextMuted, fontFamily = FontFamily.Monospace, maxLines = 1)
         }
     }
-    HorizontalDivider(color = Border, thickness = 0.5.dp)
+    HorizontalDivider(color = BorderSub, thickness = 0.5.dp)
 }
