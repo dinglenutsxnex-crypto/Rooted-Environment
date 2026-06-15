@@ -1,11 +1,14 @@
 package com.rootdroid.inspector
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Process
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,6 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.rootdroid.inspector.service.InspectorOverlayService
 import com.rootdroid.inspector.ui.theme.*
@@ -25,34 +29,33 @@ import com.rootdroid.inspector.virtual.AppLoader
 import com.rootdroid.inspector.virtual.ContainerManager
 import com.rootdroid.inspector.virtual.FakeSuProvider
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Hosts a containerized app.
- *
- * Flow:
- *  1. Installs fake su env into this process.
- *  2. Loads the APK from our private container copy via DexClassLoader → the app runs
- *     inside THIS process (same PID = Process.myPid()).
- *  3. Registers the session in ContainerManager.activeSessions so the overlay
- *     can discover it and attach logcat/method enumeration.
- *  4. Fires InspectorOverlayService with pkg + our PID → overlay auto-attaches.
- */
 class ContainerHostActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_PKG = "pkg"
     }
 
+    private lateinit var pkg: String
+    private val statusState = mutableStateOf("Setting up container…")
+
+    private val permLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val denied = results.entries.filter { !it.value }.map { it.key.substringAfterLast('.') }
+        if (denied.isNotEmpty()) {
+            Toast.makeText(this, "Permissions denied by user: ${denied.joinToString()}", Toast.LENGTH_SHORT).show()
+        }
+        loadContainer()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val pkg = intent.getStringExtra(EXTRA_PKG) ?: run { finish(); return }
+        pkg = intent.getStringExtra(EXTRA_PKG) ?: run { finish(); return }
 
-        // Show loading screen
-        val statusState = mutableStateOf("Setting up container…")
         setContent {
             RootDroidTheme {
                 val status by statusState
@@ -60,26 +63,37 @@ class ContainerHostActivity : ComponentActivity() {
             }
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            // 1. Fake su + env
-            FakeSuProvider.install(this@ContainerHostActivity)
-            System.setProperty("vs.fake_bin_path",
-                FakeSuProvider.fakeBinPath(this@ContainerHostActivity))
-            System.setProperty("vs.data_dir.$pkg",
-                ContainerManager.dataDir(this@ContainerHostActivity, pkg).absolutePath)
+        FakeSuProvider.install(this)
+        System.setProperty("vs.fake_bin_path", FakeSuProvider.fakeBinPath(this))
 
-            // 2. Load APK from container copy
+        val apkFile = ContainerManager.apkFile(this, pkg)
+        if (!apkFile.exists()) {
+            Toast.makeText(this, "Container APK not found — remove and re-add the app", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+
+        val missingPerms = parseApkPermissions(apkFile.absolutePath).filter { perm ->
+            ContextCompat.checkSelfPermission(this, perm) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missingPerms.isNotEmpty()) {
+            statusState.value = "Requesting ${missingPerms.size} permission(s)…"
+            permLauncher.launch(missingPerms.toTypedArray())
+        } else {
+            loadContainer()
+        }
+    }
+
+    private fun loadContainer() {
+        lifecycleScope.launch(Dispatchers.IO) {
             val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
             val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
+            val dataDir = ContainerManager.dataDir(this@ContainerHostActivity, pkg)
 
-            if (!apkFile.exists()) {
-                withContext(Dispatchers.Main) {
-                    statusState.value = "Container APK missing — remove and re-install"
-                }
-                delay(2500); finish(); return@launch
-            }
+            System.setProperty("vs.data_dir.$pkg", dataDir.absolutePath)
 
-            withContext(Dispatchers.Main) { statusState.value = "Loading from container…" }
+            withContext(Dispatchers.Main) { statusState.value = "Loading APK into container…" }
 
             val nativeLib = try {
                 packageManager.getApplicationInfo(pkg, 0).nativeLibraryDir
@@ -92,71 +106,67 @@ class ContainerHostActivity : ComponentActivity() {
                 parentLoader = classLoader,
             )
 
-            val ourPid = Process.myPid()
-
-            if (result.classLoader != null) {
-                // 3. Register session — overlay will detect this and attach
-                ContainerManager.registerSession(pkg, ourPid, result.classLoader, apkFile.absolutePath)
-
-                withContext(Dispatchers.Main) { statusState.value = "Initialising app in container…" }
-                val msg = AppLoader.invokeApplication(this@ContainerHostActivity, pkg, result.classLoader)
-                withContext(Dispatchers.Main) { statusState.value = msg }
-
-                // 4. Start / update overlay with our PID
-                if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
-                    withContext(Dispatchers.Main) {
-                        startForegroundService(
-                            Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
-                                .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-                                .putExtra(InspectorOverlayService.EXTRA_PID, ourPid)
-                        )
-                    }
-                }
-                // Stay alive — app running in-process, overlay streams our logcat
-
-            } else {
-                // Fallback: launch system app, register with system PID
+            if (result.classLoader == null) {
                 withContext(Dispatchers.Main) {
-                    statusState.value = "In-process load failed — launching system app + overlay"
+                    Toast.makeText(
+                        this@ContainerHostActivity,
+                        "Failed to load APK: ${result.error}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    finish()
                 }
-                delay(600)
+                return@launch
+            }
 
-                // Start overlay before launching so it's visible over the system app
+            val ourPid = Process.myPid()
+            ContainerManager.registerSession(pkg, ourPid, result.classLoader, apkFile.absolutePath)
+
+            withContext(Dispatchers.Main) { statusState.value = "Invoking app in container…" }
+
+            val msg = AppLoader.invokeApplication(
+                context     = this@ContainerHostActivity,
+                packageName = pkg,
+                loader      = result.classLoader,
+                dataDir     = dataDir,
+            )
+
+            withContext(Dispatchers.Main) {
+                statusState.value = msg
+
                 if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
-                    withContext(Dispatchers.Main) {
-                        startForegroundService(
-                            Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
-                                .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-                        )
-                    }
+                    startForegroundService(
+                        Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
+                            .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
+                            .putExtra(InspectorOverlayService.EXTRA_PID, ourPid)
+                    )
                 }
-
-                packageManager.getLaunchIntentForPackage(pkg)
-                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ?.let { withContext(Dispatchers.Main) { startActivity(it) } }
-
-                // Register with system PID (found after launch)
-                delay(1500)
-                val sysPid = try {
-                    Runtime.getRuntime().exec(arrayOf("pidof", pkg))
-                        .inputStream.bufferedReader().readText().trim()
-                        .split(" ").lastOrNull()?.toIntOrNull() ?: -1
-                } catch (_: Exception) { -1 }
-
-                ContainerManager.registerSession(pkg, sysPid, null, apkFile.absolutePath)
-                finish()
             }
         }
     }
 
+    private fun parseApkPermissions(apkPath: String): List<String> {
+        return try {
+            @Suppress("DEPRECATION")
+            val info = packageManager.getPackageArchiveInfo(apkPath, PackageManager.GET_PERMISSIONS)
+            info?.requestedPermissions
+                ?.filter { it.startsWith("android.permission.") }
+                ?.filter { isDangerousPermission(it) }
+                ?: emptyList()
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun isDangerousPermission(perm: String): Boolean {
+        return try {
+            val info = packageManager.getPermissionInfo(perm, 0)
+            (info.protectionLevel and android.content.pm.PermissionInfo.PROTECTION_DANGEROUS) != 0
+        } catch (_: Exception) { false }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        val pkg = intent.getStringExtra(EXTRA_PKG) ?: return
         ContainerManager.unregisterSession(pkg)
     }
 }
-
-// ── Loading screen ────────────────────────────────────────────────────────────
 
 @Composable
 private fun LaunchScreen(pkg: String, status: String) {
@@ -170,12 +180,16 @@ private fun LaunchScreen(pkg: String, status: String) {
             modifier = Modifier.padding(32.dp),
         ) {
             CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(pkg.split(".").last(), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                 Text(pkg, fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
             }
             Box(
-                modifier = Modifier.background(SurfaceHigh, RoundedCornerShape(8.dp))
+                modifier = Modifier
+                    .background(SurfaceHigh, RoundedCornerShape(8.dp))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(status, fontSize = 11.sp, color = TextSecond, fontFamily = FontFamily.Monospace)
