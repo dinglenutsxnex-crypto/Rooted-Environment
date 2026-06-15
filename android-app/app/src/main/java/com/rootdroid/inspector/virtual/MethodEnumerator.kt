@@ -25,18 +25,18 @@ object MethodEnumerator {
         "com.google.", "kotlinx.", "dalvik.", "libcore.",
     )
 
+    /**
+     * Fast path: reuse an existing [DexClassLoader] already holding the loaded APK.
+     * Only DexFile.entries() is needed to walk the class list — no new classloader created.
+     */
     @Suppress("DEPRECATION")
-    suspend fun enumerate(context: Context, packageName: String): List<MethodInfo> =
+    suspend fun enumerateFromLoader(loader: DexClassLoader, apkPath: String): List<MethodInfo> =
         withContext(Dispatchers.IO) {
             try {
-                val apkPath = context.packageManager
-                    .getApplicationInfo(packageName, PackageManager.GET_META_DATA).sourceDir
-                val optDir = context.getDir("dex_me", Context.MODE_PRIVATE).absolutePath
-                val loader = DexClassLoader(apkPath, optDir, null, context.classLoader)
-                val dex = DexFile(apkPath)
+                val dex     = DexFile(apkPath)
+                val entries = dex.entries()
                 val results = mutableListOf<MethodInfo>()
 
-                val entries = dex.entries()
                 while (entries.hasMoreElements()) {
                     val cn = entries.nextElement()
                     if (SKIP_PREFIXES.any { cn.startsWith(it) }) continue
@@ -46,18 +46,34 @@ object MethodEnumerator {
                             val mods = m.modifiers
                             results += MethodInfo(
                                 shortClass = cn.split("$").first().split(".").last(),
-                                fullClass = cn,
+                                fullClass  = cn,
                                 methodName = m.name,
-                                params = m.parameterTypes.joinToString(", ") { it.simpleName },
+                                params     = m.parameterTypes.joinToString(", ") { it.simpleName },
                                 returnType = m.returnType.simpleName,
-                                isNative = Modifier.isNative(mods),
-                                isPublic = Modifier.isPublic(mods),
+                                isNative   = Modifier.isNative(mods),
+                                isPublic   = Modifier.isPublic(mods),
                             )
                         }
                     } catch (_: Throwable) {}
                 }
+
                 dex.close()
                 results.sortedWith(compareBy({ it.shortClass }, { it.methodName }))
+            } catch (_: Exception) { emptyList() }
+        }
+
+    /**
+     * Slow path: create a new DexClassLoader from scratch (used when no live session exists).
+     */
+    @Suppress("DEPRECATION")
+    suspend fun enumerate(context: Context, packageName: String): List<MethodInfo> =
+        withContext(Dispatchers.IO) {
+            try {
+                val apkPath = context.packageManager
+                    .getApplicationInfo(packageName, PackageManager.GET_META_DATA).sourceDir
+                val optDir  = context.getDir("dex_me", Context.MODE_PRIVATE).absolutePath
+                val loader  = DexClassLoader(apkPath, optDir, null, context.classLoader)
+                enumerateFromLoader(loader, apkPath)
             } catch (_: Exception) { emptyList() }
         }
 }
