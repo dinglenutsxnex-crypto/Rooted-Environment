@@ -33,8 +33,8 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest already ships Android SDK — no setup-android action needed
+      # (android-actions/setup-android sets JAVA_TOOL_OPTIONS=-Xmx64m which breaks gradlew)
 
       # Gradle wrapper JAR cannot be stored as text — download the official one
       - name: Bootstrap Gradle wrapper JAR
@@ -53,6 +53,8 @@ jobs:
       - name: Build Debug APK
         if: ${{ github.event.inputs.build_type == 'debug' }}
         run: ./gradlew :app:assembleDebug --no-daemon
+        env:
+          JAVA_TOOL_OPTIONS: ""
 
       - name: Upload Debug APK
         if: ${{ github.event.inputs.build_type == 'debug' }}
@@ -67,6 +69,7 @@ jobs:
         if: ${{ github.event.inputs.build_type != 'debug' }}
         run: ./gradlew :app:assembleRelease --no-daemon
         env:
+          JAVA_TOOL_OPTIONS: ""
           KEYSTORE_PATH: ${{ github.workspace }}/android-app/keystore.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -80,11 +83,9 @@ jobs:
           APKSIGNER="$(find "$ANDROID_SDK_ROOT" -name apksigner | grep -v jar | head -1)"
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
 
-          # zipalign first
           ZIPALIGN="$(find "$ANDROID_SDK_ROOT" -name zipalign | head -1)"
           "$ZIPALIGN" -v 4 "$UNSIGNED" app/build/outputs/apk/release/app-release-aligned.apk
 
-          # sign
           "$APKSIGNER" sign \
             --ks keystore.jks \
             --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
