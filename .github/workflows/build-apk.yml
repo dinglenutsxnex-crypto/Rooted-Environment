@@ -73,7 +73,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Decode keystore & sign APK
-        if: ${{ github.event.inputs.build_type != 'debug' && secrets.KEYSTORE_BASE64 != '' }}
+        if: ${{ github.event.inputs.build_type != 'debug' }}
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
 
