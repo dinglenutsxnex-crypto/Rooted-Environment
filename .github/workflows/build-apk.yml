@@ -81,10 +81,8 @@ jobs:
         run: ./gradlew :app:assembleRelease --no-daemon
         env:
           JAVA_TOOL_OPTIONS: ""
-          KEYSTORE_PATH: ${{ github.workspace }}/android-app/keystore.jks
-          KEYSTORE_PASSWORD: rootdroid123
-          KEY_ALIAS: rootdroid
-          KEY_PASSWORD: rootdroid123
+          # No signing env vars here — Gradle produces app-release-unsigned.apk
+          # The next step handles signing via apksigner
 
       - name: Sign & zipalign APK
         if: ${{ github.event.inputs.build_type != 'debug' }}
