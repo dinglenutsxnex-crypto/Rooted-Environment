@@ -4,26 +4,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 
 val MonoFamily = FontFamily.Monospace
 
 private val DarkColors = darkColorScheme(
-    primary           = NeonGreen,
-    onPrimary         = Color.Black,
-    secondary         = NeonGreenDim,
-    onSecondary       = Color.Black,
-    background        = Background,
-    onBackground      = TextPrimary,
-    surface           = Surface,
-    onSurface         = TextPrimary,
-    surfaceVariant    = SurfaceHigh,
-    onSurfaceVariant  = TextMuted,
-    outline           = Border,
-    error             = LogError,
-    onError           = Color.White,
+    primary          = Accent,
+    onPrimary        = Color(0xFF0D1117),
+    primaryContainer = AccentMuted,
+    secondary        = StatusGreen,
+    onSecondary      = Color(0xFF0D1117),
+    background       = Background,
+    onBackground     = TextPrimary,
+    surface          = Surface,
+    onSurface        = TextPrimary,
+    surfaceVariant   = SurfaceHigh,
+    onSurfaceVariant = TextSecond,
+    outline          = Border,
+    outlineVariant   = BorderSub,
+    error            = StatusRed,
+    onError          = Color.White,
 )
 
 @Composable
