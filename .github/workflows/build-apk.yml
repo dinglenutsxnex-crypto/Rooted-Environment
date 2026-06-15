@@ -78,7 +78,13 @@ jobs:
       - name: Decode keystore & sign APK
         if: ${{ github.event.inputs.build_type != 'debug' }}
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
+          KS_B64="${{ secrets.KEYSTORE_BASE64 }}"
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::KEYSTORE_BASE64 secret not set — skipping signing. Unsigned APK will be uploaded."
+            exit 0
+          fi
+
+          echo "$KS_B64" | base64 --decode > keystore.jks
 
           APKSIGNER="$(find "$ANDROID_SDK_ROOT" -name apksigner | grep -v jar | head -1)"
           UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
