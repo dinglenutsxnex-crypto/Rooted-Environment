@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# Gradle start up script for POSIX compatible systems.
+#
+
+APP_NAME="Gradle"
+APP_BASE_NAME=$(basename "$0")
+
+# Default JVM options
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+# Use JAVA_HOME if set
+if [ -n "$JAVA_HOME" ]; then
+    JAVA_EXE="$JAVA_HOME/bin/java"
+else
+    JAVA_EXE="java"
+fi
+
+# Resolve script directory
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+
+# Wrapper jar
+GRADLE_WRAPPER_JAR="$SCRIPT_DIR/gradle/wrapper/gradle-wrapper.jar"
+
+exec "$JAVA_EXE" $DEFAULT_JVM_OPTS \
+    -classpath "$GRADLE_WRAPPER_JAR" \
+    org.gradle.wrapper.GradleWrapperMain \
+    "$@"
