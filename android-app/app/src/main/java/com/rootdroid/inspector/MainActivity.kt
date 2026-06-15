@@ -31,8 +31,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repo: InstalledAppsRepository
 
-    // Permission launcher
-    private val permLauncher = registerForActivityResult(
+    // Permission launcher — internal so composables receiving `activity` can call it
+    val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         // Refresh state after permissions granted
