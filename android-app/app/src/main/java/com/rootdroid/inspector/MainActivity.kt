@@ -1,192 +1,162 @@
 package com.rootdroid.inspector
 
+import android.app.AppOpsManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Process
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.rootdroid.inspector.model.InstalledApp
-import com.rootdroid.inspector.model.LogEntry
-import com.rootdroid.inspector.model.ManagedApp
-import com.rootdroid.inspector.model.ProcessInfo
 import com.rootdroid.inspector.repository.InstalledAppsRepository
-import com.rootdroid.inspector.service.InspectorOverlayService
 import com.rootdroid.inspector.ui.AppPickerSheet
 import com.rootdroid.inspector.ui.HomeScreen
-import com.rootdroid.inspector.ui.InspectorScreen
+import com.rootdroid.inspector.ui.PermissionsScreen
 import com.rootdroid.inspector.ui.theme.RootDroidTheme
-import com.rootdroid.inspector.virtual.ContainerEngine
+import com.rootdroid.inspector.virtual.ContainerApp
+import com.rootdroid.inspector.virtual.ContainerManager
+import com.rootdroid.inspector.virtual.FakeSuProvider
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var repo: InstalledAppsRepository
 
-    val overlayPermLauncher = registerForActivityResult(
+    private val overlayPermLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {}
+    ) { /* re-check fires via onResume lifecycle observer */ }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        repo = InstalledAppsRepository(this)
-        ContainerEngine.init(this)   // install fake su + env
-
-        setContent {
-            RootDroidTheme {
-                VirtualSpaceApp(repo = repo, activity = this)
-            }
-        }
-    }
+    private val usagePermLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { }
 
     fun requestOverlayPermission() {
         overlayPermLauncher.launch(
             Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
         )
     }
+
+    fun requestUsagePermission() {
+        usagePermLauncher.launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+    }
+
+    fun hasUsageStatsPerm(): Boolean = try {
+        val ops = getSystemService(APP_OPS_SERVICE) as AppOpsManager
+        @Suppress("DEPRECATION")
+        ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName) ==
+                AppOpsManager.MODE_ALLOWED
+    } catch (_: Exception) { false }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        repo = InstalledAppsRepository(this)
+        FakeSuProvider.install(this)
+
+        setContent {
+            RootDroidTheme {
+                VirtualSpaceApp(activity = this, repo = repo)
+            }
+        }
+    }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
-fun VirtualSpaceApp(repo: InstalledAppsRepository, activity: MainActivity) {
+fun VirtualSpaceApp(activity: MainActivity, repo: InstalledAppsRepository) {
     val scope = rememberCoroutineScope()
 
-    var managedApps       by remember { mutableStateOf<List<ManagedApp>>(emptyList()) }
-    var installedApps     by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
-    var isLoadingInstalled by remember { mutableStateOf(false) }
-    var showPicker        by remember { mutableStateOf(false) }
-    var inspectedApp      by remember { mutableStateOf<ManagedApp?>(null) }
-    var rootSimActive     by remember { mutableStateOf(false) }
+    // ── Permission state (re-checked on every resume) ─────────────────────────
+    var overlayOk by remember { mutableStateOf(Settings.canDrawOverlays(activity)) }
+    var usageOk   by remember { mutableStateOf(activity.hasUsageStatsPerm()) }
 
-    var logs        by remember { mutableStateOf<List<LogEntry>>(emptyList()) }
-    var processInfo by remember { mutableStateOf<ProcessInfo?>(null) }
-    var openFiles   by remember { mutableStateOf<List<String>>(emptyList()) }
-    var pid         by remember { mutableIntStateOf(-1) }
-    var isRunning   by remember { mutableStateOf(false) }
-    var overlayActive by remember { mutableStateOf(false) }
-    var logJob      by remember { mutableStateOf<Job?>(null) }
-
-    LaunchedEffect(Unit) {
-        managedApps   = repo.loadManagedApps()
-        rootSimActive = ContainerEngine.rootSimulationActive(activity)
-    }
-
-    fun refreshPid(app: ManagedApp) {
-        scope.launch {
-            val found = ContainerEngine.findPid(activity, app.packageName)
-            if (found > 0) {
-                pid       = found
-                isRunning = true
-                processInfo = ContainerEngine.getProcessInfo(activity, found)
-                openFiles   = ContainerEngine.getOpenFiles(activity, found)
-                logJob?.cancel()
-                logJob = ContainerEngine.streamLogcat(found)
-                    .onEach { logs = logs + it }
-                    .launchIn(scope)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                overlayOk = Settings.canDrawOverlays(activity)
+                usageOk   = activity.hasUsageStatsPerm()
             }
         }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
     }
 
-    fun openSpace(app: ManagedApp) {
-        inspectedApp = app
-        logs = emptyList(); processInfo = null; openFiles = emptyList()
-        pid = -1; isRunning = false
-        logJob?.cancel()
-        refreshPid(app)
+    // ── Permission gate ───────────────────────────────────────────────────────
+    if (!overlayOk) {
+        PermissionsScreen(
+            overlayGranted = overlayOk,
+            usageGranted   = usageOk,
+            onGrantOverlay = { activity.requestOverlayPermission() },
+            onGrantUsage   = { activity.requestUsagePermission() },
+            onContinue     = { /* disabled until overlay granted */ },
+        )
+        return
     }
 
-    fun launchInSpace(app: ManagedApp) {
-        ContainerEngine.launchInSpace(activity, app.packageName)
-        scope.launch { delay(1500); refreshPid(app) }
+    // ── Main app state ────────────────────────────────────────────────────────
+    var containerApps  by remember { mutableStateOf<List<ContainerApp>>(emptyList()) }
+    var installedApps  by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
+    var loadingApps    by remember { mutableStateOf(false) }
+    var showPicker     by remember { mutableStateOf(false) }
+    var installingPkg  by remember { mutableStateOf<String?>(null) }
+
+    // Load container app list once
+    LaunchedEffect(overlayOk) {
+        containerApps = ContainerManager.list(activity)
     }
 
-    fun killInSpace() {
+    fun refresh() { containerApps = ContainerManager.list(activity) }
+
+    fun installApp(app: InstalledApp) {
+        if (containerApps.any { it.packageName == app.packageName }) return
+        showPicker    = false
+        installingPkg = app.packageName
         scope.launch {
-            ContainerEngine.killProcess(activity, pid)
-            isRunning = false; pid = -1
-            logJob?.cancel()
+            ContainerManager.install(activity, app.packageName)
+            installingPkg = null
+            refresh()
         }
     }
 
-    fun toggleOverlay(app: ManagedApp) {
-        if (!Settings.canDrawOverlays(activity)) {
-            activity.requestOverlayPermission(); return
-        }
-        if (overlayActive) {
-            activity.stopService(Intent(activity, InspectorOverlayService::class.java))
-            overlayActive = false
-        } else {
-            activity.startForegroundService(
-                Intent(activity, InspectorOverlayService::class.java).apply {
-                    putExtra(InspectorOverlayService.EXTRA_PACKAGE, app.packageName)
-                    putExtra(InspectorOverlayService.EXTRA_PID, pid)
-                }
-            )
-            overlayActive = true
+    fun removeApp(app: ContainerApp) {
+        scope.launch {
+            withContext(Dispatchers.IO) { ContainerManager.uninstall(activity, app.packageName) }
+            refresh()
         }
     }
 
-    when {
-        inspectedApp != null -> {
-            val app = inspectedApp!!
-            InspectorScreen(
-                app = app,
-                icon = repo.getIcon(app.packageName),
-                pid = pid,
-                isRunning = isRunning,
-                logs = logs,
-                calls = emptyList(),
-                memoryRegions = emptyList(),
-                openFiles = openFiles,
-                processInfo = processInfo,
-                onBack = {
-                    logJob?.cancel(); inspectedApp = null
-                    if (overlayActive) {
-                        activity.stopService(Intent(activity, InspectorOverlayService::class.java))
-                        overlayActive = false
-                    }
-                },
-                onLaunch  = { launchInSpace(app) },
-                onKill    = { killInSpace() },
-                onToggleOverlay = { toggleOverlay(app) },
-                overlayActive = overlayActive,
-            )
-        }
-        else -> {
-            HomeScreen(
-                managedApps   = managedApps,
-                rootSimActive = rootSimActive,
-                onAddApp = {
-                    showPicker = true; isLoadingInstalled = true
-                    scope.launch { installedApps = repo.getAllInstalledApps(); isLoadingInstalled = false }
-                },
-                onLaunch  = { app -> openSpace(app); launchInSpace(app) },
-                onRemove  = { app ->
-                    managedApps = managedApps.filter { it.packageName != app.packageName }
-                    scope.launch { repo.saveManagedApps(managedApps) }
-                },
-                getIcon   = { repo.getIcon(it) },
-            )
-            if (showPicker) {
-                AppPickerSheet(
-                    apps = installedApps,
-                    isLoading = isLoadingInstalled,
-                    onSelect = { app ->
-                        if (managedApps.none { it.packageName == app.packageName }) {
-                            val new = ManagedApp(app.packageName, app.appName)
-                            managedApps = managedApps + new
-                            scope.launch { repo.saveManagedApps(managedApps) }
-                        }
-                        showPicker = false
-                    },
-                    onDismiss = { showPicker = false },
-                )
+    // ── UI ────────────────────────────────────────────────────────────────────
+    HomeScreen(
+        containerApps  = containerApps,
+        installingPkg  = installingPkg,
+        onAddApp = {
+            showPicker = true
+            loadingApps = true
+            scope.launch {
+                installedApps = repo.getAllInstalledApps()
+                loadingApps = false
             }
-        }
+        },
+        onLaunch = { app -> ContainerManager.launch(activity, app.packageName) },
+        onRemove = { app -> removeApp(app) },
+        getIcon  = { pkg -> repo.getIcon(pkg) },
+    )
+
+    if (showPicker) {
+        AppPickerSheet(
+            apps      = installedApps,
+            isLoading = loadingApps,
+            onSelect  = { app -> installApp(app) },
+            onDismiss = { showPicker = false },
+        )
     }
 }
