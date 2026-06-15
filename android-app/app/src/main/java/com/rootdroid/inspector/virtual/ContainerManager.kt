@@ -64,8 +64,7 @@ object ContainerManager {
 
     /**
      * Copies the host-installed APK into our private dir (read-only, required
-     * by Android 8+ DexClassLoader security check), then installs it into the
-     * container user profile via root so it can be launched in isolation.
+     * by Android 8+ DexClassLoader security check).
      */
     suspend fun install(ctx: Context, pkg: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -73,7 +72,6 @@ object ContainerManager {
             val info  = pm.getApplicationInfo(pkg, 0)
             val label = pm.getApplicationLabel(info).toString()
 
-            // ── Copy APK for in-process dex inspection ──
             val dst = apkFile(ctx, pkg).also { it.parentFile!!.mkdirs() }
             // Make writable before copy in case of re-install over read-only file
             if (dst.exists()) dst.setWritable(true, false)
@@ -93,14 +91,6 @@ object ContainerManager {
 
             dataDir(ctx, pkg); optDir(ctx, pkg)
 
-            // ── Install into container user via root ──
-            val rooted = UserSpaceManager.isRooted()
-            if (rooted) {
-                UserSpaceManager.installIntoContainer(ctx, pkg)
-                UserSpaceManager.installFakeSuForContainer(ctx, pkg)
-            }
-
-            // ── Register in app list ──
             val apps = list(ctx).toMutableList()
             if (apps.none { it.packageName == pkg }) {
                 apps += ContainerApp(pkg, label, apkSizeBytes = dst.length())
@@ -121,9 +111,6 @@ object ContainerManager {
     }
 
     suspend fun uninstallAsync(ctx: Context, pkg: String) = withContext(Dispatchers.IO) {
-        if (UserSpaceManager.isRooted()) {
-            UserSpaceManager.uninstallFromContainer(ctx, pkg)
-        }
         uninstall(ctx, pkg)
     }
 

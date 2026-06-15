@@ -31,7 +31,6 @@ import com.rootdroid.inspector.ui.theme.*
 import com.rootdroid.inspector.virtual.AppLoader
 import com.rootdroid.inspector.virtual.ContainerManager
 import com.rootdroid.inspector.virtual.FakeSuProvider
-import com.rootdroid.inspector.virtual.UserSpaceManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -89,16 +88,16 @@ class ContainerHostActivity : ComponentActivity() {
             try {
                 val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
                 val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
+                val dataDir = ContainerManager.dataDir(this@ContainerHostActivity, pkg)
 
-                // ── Step 1: Load dex for static inspection / method hooking ──
+                // ── Step 1: Make APK read-only (Android 8+ DexClassLoader requirement) ──
                 withContext(Dispatchers.Main) { statusState.value = "Loading dex…" }
-
-                // Android 8+ requires dex path to be read-only for DexClassLoader
                 if (apkFile.canWrite()) {
                     apkFile.setWritable(false, false)
                     apkFile.setReadable(true, false)
                 }
 
+                // ── Step 2: Load dex in-process for inspection + Application init ──
                 val result = AppLoader.loadFromPath(
                     apkPath      = apkFile.absolutePath,
                     optDir       = optDir.absolutePath,
@@ -106,64 +105,47 @@ class ContainerHostActivity : ComponentActivity() {
                     parentLoader = classLoader,
                 )
 
-                // Register the dex loader for method enumeration in the overlay
-                if (result.classLoader != null) {
-                    ContainerManager.registerSession(
-                        pkg     = pkg,
-                        pid     = -1, // PID not known yet
-                        loader  = result.classLoader,
-                        apkPath = apkFile.absolutePath,
-                    )
-                }
-
-                // ── Step 2: Launch inside isolated container user via root ──
-                val rooted = UserSpaceManager.isRooted()
-
-                val appPid: Int
-                if (rooted) {
-                    withContext(Dispatchers.Main) { statusState.value = "Launching in container user…" }
-                    appPid = UserSpaceManager.launchInContainer(this@ContainerHostActivity, pkg)
-                    if (appPid < 0) {
-                        withContext(Dispatchers.Main) {
-                            showToast("Failed to launch $pkg in container. Is it installed?")
-                            finish()
-                        }
-                        return@launch
-                    }
-                } else {
-                    // No root — can only do dex inspection, no real container isolation
+                if (result.classLoader == null) {
                     withContext(Dispatchers.Main) {
-                        showToast("No root detected — container isolation unavailable. Dex inspection only.")
+                        showToast("Dex load failed: ${result.error}")
+                        finish()
                     }
-                    appPid = Process.myPid()
+                    return@launch
                 }
 
-                // ── Step 3: Update session with real PID ──
-                if (result.classLoader != null) {
-                    ContainerManager.registerSession(
-                        pkg     = pkg,
-                        pid     = appPid,
-                        loader  = result.classLoader,
-                        apkPath = apkFile.absolutePath,
-                    )
-                }
+                // ── Step 3: Register session (our PID — app runs in our process) ──
+                val pid = Process.myPid()
+                ContainerManager.registerSession(
+                    pkg     = pkg,
+                    pid     = pid,
+                    loader  = result.classLoader,
+                    apkPath = apkFile.absolutePath,
+                )
 
-                // ── Step 4: Start overlay inspector ──
+                // ── Step 4: Invoke Application.onCreate() with ContainerContext ──
+                withContext(Dispatchers.Main) { statusState.value = "Initialising app…" }
+                val appMsg = AppLoader.invokeApplication(
+                    context     = this@ContainerHostActivity,
+                    packageName = pkg,
+                    loader      = result.classLoader,
+                    dataDir     = dataDir,
+                    apkPath     = apkFile.absolutePath,
+                )
+                android.util.Log.d("ContainerHost", "invokeApplication: $appMsg")
+
+                // ── Step 5: Start overlay ──
                 withContext(Dispatchers.Main) {
-                    statusState.value = "Container running · PID $appPid"
+                    statusState.value = "Container running · PID $pid"
 
                     if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
                         startForegroundService(
                             Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
                                 .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-                                .putExtra(InspectorOverlayService.EXTRA_PID, appPid)
+                                .putExtra(InspectorOverlayService.EXTRA_PID, pid)
                         )
                     }
 
-                    // Short delay so the user sees the "running" status, then close
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        finish()
-                    }, 800)
+                    Handler(Looper.getMainLooper()).postDelayed({ finish() }, 800)
                 }
 
             } catch (t: Throwable) {

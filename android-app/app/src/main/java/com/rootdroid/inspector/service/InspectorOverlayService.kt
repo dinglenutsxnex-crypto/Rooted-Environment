@@ -163,20 +163,8 @@ class InspectorOverlayService : Service() {
 
         logJob?.cancel()
         logJob = scope.launch {
-            // Use root-based logcat if available (full buffer access), else fallback
-            val useRoot = try {
-                val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-                val out = p.inputStream.bufferedReader().readLine() ?: ""
-                p.waitFor()
-                out.contains("uid=0")
-            } catch (_: Exception) { false }
-
-            val stream = if (useRoot) {
-                com.rootdroid.inspector.root.RootBridge.streamLogcat(session.pid)
-            } else {
-                ContainerEngine.streamLogcat(session.pid)
-            }
-            stream.collect { entry ->
+            // App runs in our process — logcat filtered by our PID works without root
+            ContainerEngine.streamLogcat(session.pid).collect { entry ->
                 if (logs.size >= 800) logs.removeAt(0)
                 logs.add(entry)
             }
@@ -186,17 +174,13 @@ class InspectorOverlayService : Service() {
         pollJob = scope.launch {
             while (true) {
                 val pid = session.pid.takeIf { it > 0 } ?: break
-                // Use su for /proc access (gets data even if app is in another user)
                 runCatching {
-                    Runtime.getRuntime()
-                        .exec(arrayOf("su", "-c", "ls -la /proc/$pid/fd 2>/dev/null"))
-                        .inputStream.bufferedReader().readText().trim()
-                        .lines().drop(1).filter { it.isNotBlank() }
+                    ContainerEngine.getOpenFiles(this@InspectorOverlayService, pid)
                         .also { if (it.isNotEmpty()) { fdLines.clear(); fdLines.addAll(it) } }
                 }
                 runCatching {
                     Runtime.getRuntime()
-                        .exec(arrayOf("su", "-c", "cat /proc/$pid/maps 2>/dev/null"))
+                        .exec(arrayOf("sh", "-c", "cat /proc/$pid/maps 2>/dev/null"))
                         .inputStream.bufferedReader().readText().trim()
                         .lines().filter { it.isNotBlank() }
                         .also { if (it.isNotEmpty()) { memLines.clear(); memLines.addAll(it) } }
