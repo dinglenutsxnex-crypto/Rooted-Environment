@@ -28,17 +28,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
-import com.rootdroid.inspector.model.ManagedApp
 import com.rootdroid.inspector.ui.theme.*
+import com.rootdroid.inspector.virtual.ContainerApp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    managedApps: List<ManagedApp>,
-    rootSimActive: Boolean,
+    containerApps: List<ContainerApp>,
+    installingPkg: String?,           // non-null while install is in progress
     onAddApp: () -> Unit,
-    onLaunch: (ManagedApp) -> Unit,
-    onRemove: (ManagedApp) -> Unit,
+    onLaunch: (ContainerApp) -> Unit,
+    onRemove: (ContainerApp) -> Unit,
     getIcon: (String) -> Drawable?,
 ) {
     Scaffold(
@@ -53,13 +53,24 @@ fun HomeScreen(
                     )
                 },
                 actions = {
-                    StatusPill(active = rootSimActive)
-                    Spacer(Modifier.width(12.dp))
+                    // App count badge
+                    if (containerApps.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .background(SurfaceHigh, RoundedCornerShape(20.dp))
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                        ) {
+                            Text(
+                                "${containerApps.size} installed",
+                                fontSize = 11.sp,
+                                color = TextSecond,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                    }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Surface,
-                    titleContentColor = TextPrimary,
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Surface),
             )
         },
         floatingActionButton = {
@@ -70,27 +81,35 @@ fun HomeScreen(
                 shape = CircleShape,
                 elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp),
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add app")
+                Icon(Icons.Default.Add, contentDescription = "Add app to space")
             }
         },
         containerColor = Background,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             HorizontalDivider(color = Border, thickness = 0.5.dp)
-            if (managedApps.isEmpty()) {
-                EmptyState(Modifier.fillMaxSize())
+
+            if (containerApps.isEmpty() && installingPkg == null) {
+                EmptyState()
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(managedApps, key = { it.packageName }) { app ->
-                        AppCard(
-                            app = app,
-                            icon = getIcon(app.packageName),
+                    // Installing spinner card
+                    if (installingPkg != null) {
+                        item(key = "installing_$installingPkg") {
+                            InstallingCard(pkg = installingPkg)
+                        }
+                    }
+
+                    items(containerApps, key = { it.packageName }) { app ->
+                        ContainerAppCard(
+                            app    = app,
+                            icon   = getIcon(app.packageName),
                             onLaunch = { onLaunch(app) },
                             onRemove = { onRemove(app) },
                         )
@@ -101,48 +120,64 @@ fun HomeScreen(
     }
 }
 
+// ── Empty state ───────────────────────────────────────────────────────────────
+
 @Composable
-private fun StatusPill(active: Boolean) {
-    Row(
-        modifier = Modifier
-            .background(
-                if (active) StatusGreen.copy(alpha = 0.12f) else SurfaceHigh,
-                RoundedCornerShape(20.dp),
+private fun EmptyState() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(32.dp),
+        ) {
+            Text("No apps in space", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextSecond)
+            Text(
+                "Tap + to install an app into the virtual container.\nIt gets its own isolated data folder and the overlay debugger launches automatically.",
+                fontSize = 12.sp,
+                color = TextMuted,
+                textAlign = TextAlign.Center,
+                lineHeight = 18.sp,
             )
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(
-            Modifier
-                .size(6.dp)
-                .background(if (active) StatusGreen else TextMuted, CircleShape)
-        )
-        Text(
-            if (active) "Root sim on" else "Basic mode",
-            fontSize = 11.sp,
-            color = if (active) StatusGreen else TextSecond,
-            fontWeight = FontWeight.Medium,
-        )
+        }
     }
 }
 
+// ── Installing spinner ────────────────────────────────────────────────────────
+
 @Composable
-private fun EmptyState(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+private fun InstallingCard(pkg: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(0.82f)
+            .background(Surface, RoundedCornerShape(12.dp))
+            .border(1.dp, Accent.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+        contentAlignment = Alignment.Center,
     ) {
-        Text("No apps added yet", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = TextSecond)
-        Spacer(Modifier.height(6.dp))
-        Text("Tap + to add an app to the virtual space", fontSize = 13.sp, color = TextMuted, textAlign = TextAlign.Center)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(8.dp),
+        ) {
+            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+            Text("Installing", fontSize = 10.sp, color = Accent, fontWeight = FontWeight.Medium)
+            Text(
+                pkg.split(".").last(),
+                fontSize = 9.sp,
+                color = TextMuted,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
+// ── Container app card ────────────────────────────────────────────────────────
+
 @Composable
-fun AppCard(
-    app: ManagedApp,
+private fun ContainerAppCard(
+    app: ContainerApp,
     icon: Drawable?,
     onLaunch: () -> Unit,
     onRemove: () -> Unit,
@@ -161,16 +196,17 @@ fun AppCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            // Icon
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(46.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(SurfaceHigh),
                 contentAlignment = Alignment.Center,
             ) {
                 if (icon != null) {
                     Image(
-                        bitmap = icon.toBitmap(48, 48).asImageBitmap(),
+                        bitmap = icon.toBitmap(46, 46).asImageBitmap(),
                         contentDescription = app.appName,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -178,7 +214,9 @@ fun AppCard(
                     Text("?", color = TextMuted, fontSize = 18.sp)
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(7.dp))
+
+            // Name
             Text(
                 app.appName,
                 fontSize = 11.sp,
@@ -189,26 +227,32 @@ fun AppCard(
                 textAlign = TextAlign.Center,
                 lineHeight = 14.sp,
             )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                app.packageName.split(".").last(),
-                fontSize = 9.sp,
-                color = TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontFamily = FontFamily.Monospace,
+
+            // Container badge
+            Box(
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .background(Accent.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+            ) {
+                Text("container", fontSize = 8.sp, color = Accent, fontWeight = FontWeight.Medium)
+            }
+        }
+
+        // Remove button
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).size(30.dp),
+        ) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = "Remove",
+                tint = TextMuted,
+                modifier = Modifier.size(13.dp),
             )
         }
 
-        // Remove button top-right
-        IconButton(
-            onClick = onRemove,
-            modifier = Modifier.align(Alignment.TopEnd).size(32.dp),
-        ) {
-            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextMuted, modifier = Modifier.size(14.dp))
-        }
-
-        // Launch strip bottom
+        // Launch strip
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -221,7 +265,7 @@ fun AppCard(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Accent, modifier = Modifier.size(11.dp))
+            Icon(Icons.Default.PlayArrow, null, tint = Accent, modifier = Modifier.size(11.dp))
             Spacer(Modifier.width(3.dp))
             Text("Launch", fontSize = 10.sp, color = Accent, fontWeight = FontWeight.Medium)
         }
