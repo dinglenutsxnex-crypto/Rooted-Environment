@@ -46,44 +46,29 @@ fun HomeScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "VIRTUAL SPACE",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = NeonGreen,
-                        letterSpacing = 3.sp,
+                        "Virtual Space",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 18.sp,
+                        color = TextPrimary,
                     )
                 },
                 actions = {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = if (rootSimActive) NeonGreen.copy(alpha = 0.15f) else SurfaceHigh,
-                        modifier = Modifier.padding(end = 12.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Box(Modifier.size(6.dp).background(if (rootSimActive) NeonGreen else TextDim, CircleShape))
-                            Text(
-                                if (rootSimActive) "SU ACTIVE" else "BASIC",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 9.sp,
-                                letterSpacing = 1.sp,
-                                color = if (rootSimActive) NeonGreen else TextMuted,
-                            )
-                        }
-                    }
+                    StatusPill(active = rootSimActive)
+                    Spacer(Modifier.width(12.dp))
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Background),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Surface,
+                    titleContentColor = TextPrimary,
+                ),
             )
         },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = onAddApp,
-                containerColor = NeonGreen,
+                containerColor = Accent,
                 contentColor = Background,
                 shape = CircleShape,
+                elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp),
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Add app")
             }
@@ -91,18 +76,24 @@ fun HomeScreen(
         containerColor = Background,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            HorizontalDivider(color = Border, thickness = 0.5.dp)
             if (managedApps.isEmpty()) {
                 EmptyState(Modifier.fillMaxSize())
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(managedApps, key = { it.packageName }) { app ->
-                        AppCard(app = app, icon = getIcon(app.packageName), onLaunch = { onLaunch(app) }, onRemove = { onRemove(app) })
+                        AppCard(
+                            app = app,
+                            icon = getIcon(app.packageName),
+                            onLaunch = { onLaunch(app) },
+                            onRemove = { onRemove(app) },
+                        )
                     }
                 }
             }
@@ -111,51 +102,128 @@ fun HomeScreen(
 }
 
 @Composable
-private fun EmptyState(modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Text("[ SPACE EMPTY ]", fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = TextDim, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
-        Text("Tap + to add an app to the virtual space", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TextDim, textAlign = TextAlign.Center)
+private fun StatusPill(active: Boolean) {
+    Row(
+        modifier = Modifier
+            .background(
+                if (active) StatusGreen.copy(alpha = 0.12f) else SurfaceHigh,
+                RoundedCornerShape(20.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .background(if (active) StatusGreen else TextMuted, CircleShape)
+        )
+        Text(
+            if (active) "Root sim on" else "Basic mode",
+            fontSize = 11.sp,
+            color = if (active) StatusGreen else TextSecond,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
 @Composable
-fun AppCard(app: ManagedApp, icon: Drawable?, onLaunch: () -> Unit, onRemove: () -> Unit) {
+private fun EmptyState(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("No apps added yet", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = TextSecond)
+        Spacer(Modifier.height(6.dp))
+        Text("Tap + to add an app to the virtual space", fontSize = 13.sp, color = TextMuted, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+fun AppCard(
+    app: ManagedApp,
+    icon: Drawable?,
+    onLaunch: () -> Unit,
+    onRemove: () -> Unit,
+) {
     Box(
         modifier = Modifier
-            .fillMaxWidth().aspectRatio(0.85f)
-            .background(SurfaceHigh, RoundedCornerShape(12.dp))
-            .border(1.dp, Border, RoundedCornerShape(12.dp))
-            .clickable { onLaunch() }
-            .padding(8.dp),
+            .fillMaxWidth()
+            .aspectRatio(0.82f)
+            .background(Surface, RoundedCornerShape(12.dp))
+            .border(0.5.dp, Border, RoundedCornerShape(12.dp))
+            .clickable { onLaunch() },
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Box(Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(Surface), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SurfaceHigh),
+                contentAlignment = Alignment.Center,
+            ) {
                 if (icon != null) {
-                    Image(bitmap = icon.toBitmap(52, 52).asImageBitmap(), contentDescription = app.appName, modifier = Modifier.fillMaxSize())
+                    Image(
+                        bitmap = icon.toBitmap(48, 48).asImageBitmap(),
+                        contentDescription = app.appName,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else {
-                    Text("?", color = TextMuted, fontFamily = FontFamily.Monospace, fontSize = 20.sp)
+                    Text("?", color = TextMuted, fontSize = 18.sp)
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Text(app.appName, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-            Text(app.packageName.split(".").last(), fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                app.appName,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                lineHeight = 14.sp,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                app.packageName.split(".").last(),
+                fontSize = 9.sp,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontFamily = FontFamily.Monospace,
+            )
         }
-        Box(Modifier.align(Alignment.TopEnd)) {
-            IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextDim, modifier = Modifier.size(14.dp))
-            }
-        }
-        Row(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .background(NeonGreen.copy(alpha = 0.08f), RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
-                .padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.Center,
+
+        // Remove button top-right
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).size(32.dp),
         ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = NeonGreen, modifier = Modifier.size(12.dp))
-            Spacer(Modifier.width(2.dp))
-            Text("LAUNCH", fontFamily = FontFamily.Monospace, fontSize = 9.sp, color = NeonGreen, letterSpacing = 1.sp)
+            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextMuted, modifier = Modifier.size(14.dp))
+        }
+
+        // Launch strip bottom
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    Accent.copy(alpha = 0.10f),
+                    RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
+                )
+                .padding(vertical = 5.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Accent, modifier = Modifier.size(11.dp))
+            Spacer(Modifier.width(3.dp))
+            Text("Launch", fontSize = 10.sp, color = Accent, fontWeight = FontWeight.Medium)
         }
     }
 }
