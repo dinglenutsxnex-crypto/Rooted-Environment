@@ -29,9 +29,11 @@ import androidx.lifecycle.lifecycleScope
 import com.rootdroid.inspector.service.InspectorOverlayService
 import com.rootdroid.inspector.ui.theme.*
 import com.rootdroid.inspector.virtual.AppLoader
+import com.rootdroid.inspector.virtual.ContainerEngine
 import com.rootdroid.inspector.virtual.ContainerManager
 import com.rootdroid.inspector.virtual.FakeSuProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -46,11 +48,7 @@ class ContainerHostActivity : ComponentActivity() {
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val denied = results.filterValues { !it }.keys.map { it.substringAfterLast('.') }
-        if (denied.isNotEmpty()) {
-            showToast("Permissions denied: ${denied.joinToString()} — container may be limited")
-        }
+    ) { _ ->
         loadContainer()
     }
 
@@ -73,7 +71,7 @@ class ContainerHostActivity : ComponentActivity() {
 
         val apkFile = ContainerManager.apkFile(this, pkg)
         if (!apkFile.exists()) {
-            showToast("Container APK not found — remove and re-add the app")
+            showToast("Container APK missing — remove and re-add the app")
             finish()
             return
         }
@@ -94,17 +92,20 @@ class ContainerHostActivity : ComponentActivity() {
             try {
                 val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
                 val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
-                val dataDir = ContainerManager.dataDir(this@ContainerHostActivity, pkg)
-                System.setProperty("vs.data_dir.$pkg", dataDir.absolutePath)
 
-                withContext(Dispatchers.Main) { statusState.value = "Loading APK…" }
+                withContext(Dispatchers.Main) { statusState.value = "Inspecting APK…" }
 
-                // Ensure APK is read-only — Android 8+ rejects DexClassLoader on writable paths.
+                // Android 8+ (API 26+): dex path must not be writable or DexClassLoader throws SecurityException.
                 if (apkFile.canWrite()) {
                     apkFile.setWritable(false, false)
                     apkFile.setReadable(true, false)
                 }
 
+                // Load dex for static analysis / class enumeration.
+                // We deliberately do NOT call invokeApplication() — running a foreign
+                // app's Application.onCreate() in-process crashes for any real app
+                // because it hits Binder, ContentProviders, and native libs that
+                // can't bootstrap inside a foreign process without a full VA framework.
                 val result = AppLoader.loadFromPath(
                     apkPath      = apkFile.absolutePath,
                     optDir       = optDir.absolutePath,
@@ -112,37 +113,55 @@ class ContainerHostActivity : ComponentActivity() {
                     parentLoader = classLoader,
                 )
 
-                if (result.classLoader == null) {
+                if (result.classLoader != null) {
+                    ContainerManager.registerSession(
+                        pkg       = pkg,
+                        pid       = Process.myPid(),
+                        loader    = result.classLoader,
+                        apkPath   = apkFile.absolutePath,
+                    )
+                }
+
+                withContext(Dispatchers.Main) { statusState.value = "Launching…" }
+
+                // Launch the real system-installed app. The OS handles activity
+                // management, process isolation, and permission grants for the app's
+                // own UID. We then track its PID and attach the overlay inspector.
+                val launched = tryLaunchViaSystem()
+
+                if (!launched) {
                     withContext(Dispatchers.Main) {
-                        showToast("APK load failed: ${result.error}")
+                        showToast("No launcher activity found for $pkg")
                         finish()
                     }
                     return@launch
                 }
 
-                val ourPid = Process.myPid()
-                ContainerManager.registerSession(pkg, ourPid, result.classLoader, apkFile.absolutePath)
+                // Give the app process a moment to start, then find its PID.
+                delay(1500)
+                val appPid = ContainerEngine.findPid(this@ContainerHostActivity, pkg)
 
-                withContext(Dispatchers.Main) { statusState.value = "Invoking Application…" }
-
-                val msg = AppLoader.invokeApplication(
-                    context     = this@ContainerHostActivity,
-                    packageName = pkg,
-                    loader      = result.classLoader,
-                    dataDir     = dataDir,
-                    apkPath     = apkFile.absolutePath,
-                )
+                // Update session with real PID if we found it.
+                if (result.classLoader != null && appPid > 0) {
+                    ContainerManager.registerSession(
+                        pkg     = pkg,
+                        pid     = appPid,
+                        loader  = result.classLoader,
+                        apkPath = apkFile.absolutePath,
+                    )
+                }
 
                 withContext(Dispatchers.Main) {
-                    statusState.value = msg
-
                     if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
+                        val overlayPid = if (appPid > 0) appPid else Process.myPid()
                         startForegroundService(
                             Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
                                 .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-                                .putExtra(InspectorOverlayService.EXTRA_PID, ourPid)
+                                .putExtra(InspectorOverlayService.EXTRA_PID, overlayPid)
                         )
                     }
+                    // Close the loading screen — the target app is now in the foreground.
+                    finish()
                 }
 
             } catch (t: Throwable) {
@@ -155,10 +174,18 @@ class ContainerHostActivity : ComponentActivity() {
     }
 
     /**
-     * Sets a per-thread uncaught exception handler so any Throwable that escapes
-     * the coroutine (e.g. from reflection callbacks on pool threads) shows as Toast
-     * instead of an ANR / crash dialog.
+     * Launch the system-installed app normally.
+     * Returns true if an intent was found and fired.
      */
+    private fun tryLaunchViaSystem(): Boolean {
+        val intent = packageManager
+            .getLaunchIntentForPackage(pkg)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            ?: return false
+        startActivity(intent)
+        return true
+    }
+
     private fun installCrashNet() {
         val main = Handler(Looper.getMainLooper())
         Thread.setDefaultUncaughtExceptionHandler { _, t ->

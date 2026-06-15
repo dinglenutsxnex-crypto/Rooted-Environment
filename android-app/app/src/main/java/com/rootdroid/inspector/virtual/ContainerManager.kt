@@ -69,15 +69,17 @@ object ContainerManager {
             val label = pm.getApplicationLabel(info).toString()
 
             val dst = apkFile(ctx, pkg).also { it.parentFile!!.mkdirs() }
+            // Must be writable before copy (re-installs land on a read-only file).
+            if (dst.exists()) dst.setWritable(true, false)
             File(info.sourceDir).copyTo(dst, overwrite = true)
             // Android 8+ (API 26+) blocks DexClassLoader on writable dex paths.
-            // The APK must be read-only before we hand it to DexClassLoader.
             dst.setWritable(false, false)
             dst.setReadable(true, false)
 
             // Copy splits if any
             info.splitSourceDirs?.forEachIndexed { i, split ->
                 val splitDst = File(dst.parentFile!!, "split_$i.apk")
+                if (splitDst.exists()) splitDst.setWritable(true, false)
                 File(split).copyTo(splitDst, overwrite = true)
                 splitDst.setWritable(false, false)
                 splitDst.setReadable(true, false)
