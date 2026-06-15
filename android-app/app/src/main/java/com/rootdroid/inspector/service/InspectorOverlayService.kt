@@ -41,7 +41,7 @@ import com.rootdroid.inspector.MainActivity
 import com.rootdroid.inspector.R
 import com.rootdroid.inspector.model.LogEntry
 import com.rootdroid.inspector.model.LogLevel
-import com.rootdroid.inspector.root.RootBridge
+import com.rootdroid.inspector.virtual.ContainerEngine
 import com.rootdroid.inspector.ui.theme.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
@@ -83,19 +83,11 @@ class InspectorOverlayService : Service() {
 
     private fun startLogStreaming() {
         serviceScope.launch {
-            if (targetPid > 0) {
-                RootBridge.streamLogcat(targetPid).collect { entry ->
+            ContainerEngine.streamLogcat(targetPid).collect { entry ->
+                if (targetPid > 0 || entry.tag.contains(targetPackage.split(".").last(), ignoreCase = true) ||
+                    entry.message.contains(targetPackage, ignoreCase = true)) {
                     if (logs.size > 500) logs.removeAt(0)
                     logs.add(entry)
-                }
-            } else {
-                // Stream all logcat and filter by package string
-                RootBridge.streamAllLogcat().collect { entry ->
-                    if (entry.tag.contains(targetPackage.split(".").last(), ignoreCase = true) ||
-                        entry.message.contains(targetPackage, ignoreCase = true)) {
-                        if (logs.size > 500) logs.removeAt(0)
-                        logs.add(entry)
-                    }
                 }
             }
         }
