@@ -3,18 +3,8 @@ package com.rootdroid.inspector.virtual
 import android.content.Context
 import android.content.pm.PackageManager
 import dalvik.system.DexClassLoader
+import java.io.File
 
-/**
- * Loads a target APK into our own process via DexClassLoader.
- *
- * Because the loaded code runs inside our process, any call to
- * Runtime.exec("su") uses OUR process environment — which already
- * has PATH prepended with the fake su binary from FakeSuProvider.
- *
- * loadFromPath() is the primary entry point when launching from a
- * container copy (not the system APK). load() falls back to the
- * system APK path (used for probing).
- */
 object AppLoader {
 
     data class LoadResult(
@@ -22,8 +12,6 @@ object AppLoader {
         val apkPath: String,
         val error: String? = null,
     )
-
-    // ── Load from an explicit APK path (container copy) ───────────────────────
 
     fun loadFromPath(
         apkPath: String,
@@ -39,11 +27,9 @@ object AppLoader {
         }
     }
 
-    // ── Load from system APK (probe / fallback) ───────────────────────────────
-
     fun load(context: Context, packageName: String): LoadResult {
         return try {
-            val info = context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+            val info   = context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
             val optDir = context.getDir("opt_${packageName.replace('.', '_')}", Context.MODE_PRIVATE)
             FakeSuProvider.install(context)
             loadFromPath(
@@ -59,35 +45,63 @@ object AppLoader {
         }
     }
 
-    // ── Invoke Application.onCreate in-process ────────────────────────────────
-
-    fun invokeApplication(context: Context, packageName: String, loader: DexClassLoader): String {
+    /**
+     * Invoke Application.onCreate() in-process using a ContainerContext so the
+     * app's file/db operations redirect to the isolated data dir.
+     *
+     * Returns a status string — never throws.
+     */
+    fun invokeApplication(
+        context: Context,
+        packageName: String,
+        loader: DexClassLoader,
+        dataDir: File? = null,
+    ): String {
         return try {
             val info = context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
             val appClassName = info.className?.takeIf { it.isNotBlank() }
-                ?: return "No Application class declared"
+                ?: return "No Application class — skipped"
 
-            val clazz    = loader.loadClass(appClassName)
-            val instance = clazz.getDeclaredConstructor().newInstance()
+            val clazz = try {
+                loader.loadClass(appClassName)
+            } catch (e: ClassNotFoundException) {
+                return "ClassNotFound: $appClassName"
+            } catch (e: Exception) {
+                return "LoadClass error: ${e.message?.take(60)}"
+            }
 
-            // attach(Context) must be called before onCreate
+            val appCtx: Context = if (dataDir != null) {
+                ContainerContext(context, packageName, dataDir)
+            } else {
+                context
+            }
+
+            val instance = try {
+                clazz.getDeclaredConstructor().newInstance()
+            } catch (e: Exception) {
+                return "Instantiation error: ${e.message?.take(60)}"
+            }
+
             try {
-                clazz.superclass?.getDeclaredMethod("attach", Context::class.java)?.apply {
-                    isAccessible = true; invoke(instance, context)
-                }
+                clazz.superclass
+                    ?.getDeclaredMethod("attach", Context::class.java)
+                    ?.apply { isAccessible = true; invoke(instance, appCtx) }
             } catch (_: Exception) {}
 
             try {
-                clazz.getDeclaredMethod("onCreate").apply { isAccessible = true; invoke(instance) }
-            } catch (_: Exception) {}
+                clazz.getDeclaredMethod("onCreate")
+                    .apply { isAccessible = true; invoke(instance) }
+            } catch (e: Exception) {
+                return "onCreate threw: ${e.javaClass.simpleName}: ${e.message?.take(60)}"
+            }
 
-            "Application loaded — fake su active in process"
+            "Loaded in container"
+        } catch (e: SecurityException) {
+            "Permission denied: ${e.message?.take(80)}"
         } catch (e: Exception) {
-            "Application invoke error: ${e.message}"
+            "${e.javaClass.simpleName}: ${e.message?.take(80)}"
         }
     }
-
-    // ── Root-check probe ──────────────────────────────────────────────────────
 
     fun probeRootChecks(context: Context, loader: DexClassLoader): Map<String, String> {
         val fakeBin = FakeSuProvider.fakeBinPath(context)
