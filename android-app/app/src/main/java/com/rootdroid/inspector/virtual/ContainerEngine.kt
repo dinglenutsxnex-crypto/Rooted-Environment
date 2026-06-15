@@ -143,6 +143,26 @@ object ContainerEngine {
         return LogEntry(timestamp = line.take(18).trim(), level = level, tag = tag, message = msg)
     }
 
+    // ── In-process app loading (fake-root intercept) ──────────────────────────
+
+    /**
+     * Loads the target APK into our process via DexClassLoader so that
+     * any Runtime.exec("su") call from that code hits our fake su binary.
+     * Returns a status string displayed in the space UI.
+     */
+    fun loadInProcess(context: Context, packageName: String): String {
+        val result = AppLoader.load(context, packageName)
+        if (result.classLoader == null) return "Load failed: ${result.error}"
+        val appMsg = AppLoader.invokeApplication(context, packageName, result.classLoader)
+        return appMsg
+    }
+
+    fun probeRootChecks(context: Context, packageName: String): Map<String, String> {
+        val result = AppLoader.load(context, packageName)
+        if (result.classLoader == null) return mapOf("error" to (result.error ?: "unknown"))
+        return AppLoader.probeRootChecks(context, result.classLoader)
+    }
+
     // ── Root simulation status ────────────────────────────────────────────────
 
     fun rootSimulationActive(context: Context): Boolean =
