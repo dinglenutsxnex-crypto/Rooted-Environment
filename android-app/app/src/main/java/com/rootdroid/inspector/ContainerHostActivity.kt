@@ -2,6 +2,7 @@ package com.rootdroid.inspector
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Process
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,13 +30,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Hosts a containerized app launch:
- *  1. Starts the InspectorOverlayService immediately (auto-overlay).
- *  2. Installs fake su environment into the process.
- *  3. Loads the APK from the container copy (not the system APK) via DexClassLoader.
- *  4. Invokes Application.onCreate() in-process so the app's init code
- *     runs with our fake-root PATH and isolated data dir.
- *  5. Falls back to launching the system app if in-process load fails.
+ * Hosts a containerized app.
+ *
+ * Flow:
+ *  1. Installs fake su env into this process.
+ *  2. Loads the APK from our private container copy via DexClassLoader → the app runs
+ *     inside THIS process (same PID = Process.myPid()).
+ *  3. Registers the session in ContainerManager.activeSessions so the overlay
+ *     can discover it and attach logcat/method enumeration.
+ *  4. Fires InspectorOverlayService with pkg + our PID → overlay auto-attaches.
  */
 class ContainerHostActivity : ComponentActivity() {
 
@@ -48,75 +51,112 @@ class ContainerHostActivity : ComponentActivity() {
 
         val pkg = intent.getStringExtra(EXTRA_PKG) ?: run { finish(); return }
 
-        // ── 1. Auto-launch overlay ────────────────────────────────────────────
-        if (Settings.canDrawOverlays(this)) {
-            startForegroundService(
-                Intent(this, InspectorOverlayService::class.java)
-                    .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
-            )
-        }
-
-        // ── 2. Show loading UI ────────────────────────────────────────────────
-        var statusText by mutableStateOf("Preparing container…")
-
+        // Show loading screen
+        val statusState = mutableStateOf("Setting up container…")
         setContent {
             RootDroidTheme {
-                LaunchScreen(pkg = pkg, status = statusText)
+                val status by statusState
+                LaunchScreen(pkg = pkg, status = status)
             }
         }
 
-        // ── 3. Setup + load in background ────────────────────────────────────
         lifecycleScope.launch(Dispatchers.IO) {
+            // 1. Fake su + env
             FakeSuProvider.install(this@ContainerHostActivity)
+            System.setProperty("vs.fake_bin_path",
+                FakeSuProvider.fakeBinPath(this@ContainerHostActivity))
+            System.setProperty("vs.data_dir.$pkg",
+                ContainerManager.dataDir(this@ContainerHostActivity, pkg).absolutePath)
 
-            val apkFile  = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
-            val optDir   = ContainerManager.optDir(this@ContainerHostActivity, pkg)
-            val dataDir  = ContainerManager.dataDir(this@ContainerHostActivity, pkg)
-
-            // Inject data dir as a system property so app code can read it
-            System.setProperty("vs.data_dir.$pkg", dataDir.absolutePath)
+            // 2. Load APK from container copy
+            val apkFile = ContainerManager.apkFile(this@ContainerHostActivity, pkg)
+            val optDir  = ContainerManager.optDir(this@ContainerHostActivity, pkg)
 
             if (!apkFile.exists()) {
-                withContext(Dispatchers.Main) { statusText = "Container APK missing — reinstall" }
-                delay(2000)
-                finish()
-                return@launch
+                withContext(Dispatchers.Main) {
+                    statusState.value = "Container APK missing — remove and re-install"
+                }
+                delay(2500); finish(); return@launch
             }
 
-            withContext(Dispatchers.Main) { statusText = "Loading from container…" }
+            withContext(Dispatchers.Main) { statusState.value = "Loading from container…" }
 
-            val nativeLibDir = try {
+            val nativeLib = try {
                 packageManager.getApplicationInfo(pkg, 0).nativeLibraryDir
             } catch (_: Exception) { null }
 
             val result = AppLoader.loadFromPath(
                 apkPath      = apkFile.absolutePath,
                 optDir       = optDir.absolutePath,
-                nativeLibDir = nativeLibDir,
+                nativeLibDir = nativeLib,
                 parentLoader = classLoader,
             )
 
+            val ourPid = Process.myPid()
+
             if (result.classLoader != null) {
-                withContext(Dispatchers.Main) { statusText = "Initialising app…" }
+                // 3. Register session — overlay will detect this and attach
+                ContainerManager.registerSession(pkg, ourPid, result.classLoader, apkFile.absolutePath)
+
+                withContext(Dispatchers.Main) { statusState.value = "Initialising app in container…" }
                 val msg = AppLoader.invokeApplication(this@ContainerHostActivity, pkg, result.classLoader)
-                withContext(Dispatchers.Main) { statusText = msg }
-                // Stay alive — the app is running in-process; overlay is streaming its logs
-            } else {
-                // ── Fallback: launch system app (overlay still runs) ──────────
-                withContext(Dispatchers.Main) {
-                    statusText = "In-process load failed — launching system app with overlay"
+                withContext(Dispatchers.Main) { statusState.value = msg }
+
+                // 4. Start / update overlay with our PID
+                if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
+                    withContext(Dispatchers.Main) {
+                        startForegroundService(
+                            Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
+                                .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
+                                .putExtra(InspectorOverlayService.EXTRA_PID, ourPid)
+                        )
+                    }
                 }
-                delay(800)
+                // Stay alive — app running in-process, overlay streams our logcat
+
+            } else {
+                // Fallback: launch system app, register with system PID
+                withContext(Dispatchers.Main) {
+                    statusState.value = "In-process load failed — launching system app + overlay"
+                }
+                delay(600)
+
+                // Start overlay before launching so it's visible over the system app
+                if (Settings.canDrawOverlays(this@ContainerHostActivity)) {
+                    withContext(Dispatchers.Main) {
+                        startForegroundService(
+                            Intent(this@ContainerHostActivity, InspectorOverlayService::class.java)
+                                .putExtra(InspectorOverlayService.EXTRA_PACKAGE, pkg)
+                        )
+                    }
+                }
+
                 packageManager.getLaunchIntentForPackage(pkg)
                     ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ?.let { startActivity(it) }
+                    ?.let { withContext(Dispatchers.Main) { startActivity(it) } }
+
+                // Register with system PID (found after launch)
+                delay(1500)
+                val sysPid = try {
+                    Runtime.getRuntime().exec(arrayOf("pidof", pkg))
+                        .inputStream.bufferedReader().readText().trim()
+                        .split(" ").lastOrNull()?.toIntOrNull() ?: -1
+                } catch (_: Exception) { -1 }
+
+                ContainerManager.registerSession(pkg, sysPid, null, apkFile.absolutePath)
                 finish()
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        val pkg = intent.getStringExtra(EXTRA_PKG) ?: return
+        ContainerManager.unregisterSession(pkg)
+    }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Loading screen ────────────────────────────────────────────────────────────
 
 @Composable
 private fun LaunchScreen(pkg: String, status: String) {
@@ -126,49 +166,20 @@ private fun LaunchScreen(pkg: String, status: String) {
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
             modifier = Modifier.padding(32.dp),
         ) {
-            CircularProgressIndicator(
-                color = Accent,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(32.dp),
-            )
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    pkg.split(".").last(),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary,
-                )
-                Text(
-                    pkg,
-                    fontSize = 10.sp,
-                    color = TextMuted,
-                    fontFamily = FontFamily.Monospace,
-                )
+            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(pkg.split(".").last(), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text(pkg, fontSize = 10.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
             }
             Box(
-                modifier = Modifier
-                    .background(SurfaceHigh, RoundedCornerShape(8.dp))
+                modifier = Modifier.background(SurfaceHigh, RoundedCornerShape(8.dp))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
-                Text(
-                    status,
-                    fontSize = 11.sp,
-                    color = TextSecond,
-                    fontFamily = FontFamily.Monospace,
-                )
+                Text(status, fontSize = 11.sp, color = TextSecond, fontFamily = FontFamily.Monospace)
             }
-            Text(
-                "Overlay debugger is active",
-                fontSize = 10.sp,
-                color = Accent.copy(alpha = 0.7f),
-                fontWeight = FontWeight.Medium,
-            )
         }
     }
 }
